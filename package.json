@@ -1,0 +1,26 @@
+{
+  "name": "brainstorm",
+  "version": "0.2.0",
+  "description": "MCP server enabling multi-agent collaboration and coordination",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "lint": "eslint src",
+    "config": "npm run build && node scripts/configure-mcp.js",
+    "test": "npm run build && node --test dist/tests/security.test.js",
+    "cleanup": "node scripts/cleanup-project.js"
+  },
+  "keywords": ["mcp", "agent", "cooperation", "collaboration"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}
