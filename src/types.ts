@@ -48,6 +48,7 @@ export interface ResourceManifest {
   creator_agent: string; // agent_name within project
   created_at: string;
   updated_at: string;
+  version: number; // Incremented on every write for optimistic locking
   mime_type?: string;
   size_bytes?: number;
   permissions?: {

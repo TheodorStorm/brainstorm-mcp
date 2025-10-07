@@ -267,7 +267,7 @@ export class AgentCoopServer {
         },
         {
           name: 'store_resource',
-          description: 'Store a shared resource or document in the project',
+          description: 'Store a shared resource or document in the project. For updates, include the current version to prevent conflicts.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -298,6 +298,10 @@ export class AgentCoopServer {
               mime_type: {
                 type: 'string',
                 description: 'Content MIME type'
+              },
+              version: {
+                type: 'number',
+                description: 'Current version for optimistic locking (required when updating existing resource). Omit for new resources.'
               },
               permissions: {
                 type: 'object',
@@ -805,6 +809,7 @@ export class AgentCoopServer {
               creator_agent: args.creator_agent as string,
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString(),
+              version: args.version as number | undefined || 0, // Will be set by storage layer
               mime_type: args.mime_type as string | undefined,
               permissions: args.permissions as ResourceManifest['permissions'] | undefined,
               metadata: args.metadata as Record<string, unknown> | undefined

@@ -663,7 +663,7 @@ export class FileSystemStorage {
       );
     }
 
-    // Check write permissions if updating existing resource
+    // Check write permissions and version if updating existing resource
     const existing = await this.getResourceManifestOnly(manifest.project_id, manifest.resource_id);
     if (existing) {
       const permissions = existing.permissions;
@@ -674,13 +674,32 @@ export class FileSystemStorage {
           { resource_id: manifest.resource_id }
         );
       }
-      if (!permissions.write.includes(manifest.creator_agent)) {
+      if (!permissions.write.includes('*') && !permissions.write.includes(manifest.creator_agent)) {
         throw new PermissionError(
           'Access denied: insufficient write permissions',
           'WRITE_PERMISSION_DENIED',
           { resource_id: manifest.resource_id, agent_name: manifest.creator_agent }
         );
       }
+
+      // Optimistic locking: check version matches
+      if (manifest.version !== undefined && manifest.version !== existing.version) {
+        throw new ConflictError(
+          'Resource has been modified by another agent. Read the latest version and retry.',
+          'VERSION_CONFLICT',
+          {
+            resource_id: manifest.resource_id,
+            expected_version: manifest.version,
+            current_version: existing.version
+          }
+        );
+      }
+
+      // Increment version for update
+      manifest.version = existing.version + 1;
+    } else {
+      // New resource starts at version 1
+      manifest.version = 1;
     }
 
     // Validate payload

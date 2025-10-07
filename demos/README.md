@@ -21,6 +21,28 @@ cd demos/tic-tac-toe
 
 **Full documentation:** [tic-tac-toe/TIC-TAC-TOE-DEMO.md](./tic-tac-toe/TIC-TAC-TOE-DEMO.md)
 
+---
+
+### 🐜 Pathfinding
+
+Multiple agents navigate a maze with real-time browser visualization. Watch ants find food while avoiding walls and each other!
+
+**Quick start:**
+```bash
+# Terminal 1: Start viewer
+cd demos/pathfinding
+./start-viewer.sh
+# Open http://localhost:3001/viewer.html
+
+# Terminal 2-5: Launch agents
+./start-ant.sh 1
+./start-ant.sh 2
+./start-ant.sh 3  # optional
+./start-ant.sh 4  # optional
+```
+
+**Full documentation:** [pathfinding/README.md](./pathfinding/README.md)
+
 ## What These Demos Show
 
 - ✅ Project creation and joining

@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Brainstorm Pathfinding Demo</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+      color: #fff;
+    }
+
+    .container {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 20px;
+      padding: 30px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      max-width: 900px;
+      width: 100%;
+    }
+
+    h1 {
+      color: #667eea;
+      margin-bottom: 10px;
+      font-size: 2em;
+      text-align: center;
+    }
+
+    .subtitle {
+      color: #666;
+      text-align: center;
+      margin-bottom: 20px;
+      font-size: 0.9em;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 20px;
+      padding: 10px;
+      background: #f5f5f5;
+      border-radius: 10px;
+      font-size: 0.9em;
+      color: #333;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #ccc;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    .status-dot.connected {
+      background: #4caf50;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .canvas-container {
+      position: relative;
+      border: 3px solid #667eea;
+      border-radius: 10px;
+      overflow: hidden;
+      background: #fff;
+      margin-bottom: 20px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+
+    .legend {
+      display: flex;
+      gap: 20px;
+      justify-content: center;
+      flex-wrap: wrap;
+      padding: 15px;
+      background: #f5f5f5;
+      border-radius: 10px;
+      color: #333;
+      font-size: 0.9em;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .legend-square {
+      width: 20px;
+      height: 20px;
+      border-radius: 4px;
+    }
+
+    .info {
+      margin-top: 20px;
+      padding: 15px;
+      background: #e3f2fd;
+      border-left: 4px solid #2196f3;
+      border-radius: 4px;
+      color: #333;
+      font-size: 0.85em;
+      line-height: 1.6;
+    }
+
+    .info strong {
+      color: #1976d2;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🤖 Brainstorm Pathfinding</h1>
+    <p class="subtitle">Multi-agent coordination demo</p>
+
+    <div class="status">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">Connecting...</span>
+    </div>
+
+    <div class="canvas-container">
+      <canvas id="gridCanvas" width="800" height="800"></canvas>
+    </div>
+
+    <div class="legend">
+      <div class="legend-item">
+        <div class="legend-square" style="background: #fff; border: 2px solid #ddd;"></div>
+        <span>Empty</span>
+      </div>
+      <div class="legend-item">
+        <div class="legend-square" style="background: #333;"></div>
+        <span>Wall</span>
+      </div>
+      <div class="legend-item">
+        <div class="legend-square" style="background: #4caf50;"></div>
+        <span>Food</span>
+      </div>
+      <div class="legend-item">
+        <div class="legend-square" style="background: #2196f3; border-radius: 50%;"></div>
+        <span>Agent</span>
+      </div>
+    </div>
+
+    <div class="info">
+      <strong>How it works:</strong> Multiple Claude Code agents coordinate through the Brainstorm MCP server.
+      Each agent computes its path independently, shares grid updates through the file system,
+      and avoids collisions through atomic operations. This viewer watches the shared state and
+      visualizes agent movements in real-time.
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('gridCanvas');
+    const ctx = canvas.getContext('2d');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+
+    let gridState = null;
+    let animatingAgents = new Map(); // agentId -> {from, to, progress}
+
+    // WebSocket connection
+    const ws = new WebSocket(`ws://${window.location.host}`);
+
+    ws.onopen = () => {
+      statusDot.classList.add('connected');
+      statusText.textContent = 'Connected - Waiting for agents...';
+    };
+
+    ws.onclose = () => {
+      statusDot.classList.remove('connected');
+      statusText.textContent = 'Disconnected';
+    };
+
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error);
+      statusText.textContent = 'Connection error';
+    };
+
+    ws.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+
+      if (message.type === 'full_state') {
+        gridState = message.grid;
+        statusText.textContent = `Active agents: ${gridState.agents?.length || 0}`;
+        render();
+      } else if (message.type === 'updates') {
+        gridState = message.fullState;
+        statusText.textContent = `Active agents: ${gridState.agents?.length || 0}`;
+
+        // Handle animations for moves
+        for (const change of message.changes) {
+          if (change.type === 'agent_moved') {
+            animatingAgents.set(change.agentId, {
+              from: change.from,
+              to: change.to,
+              progress: 0
+            });
+          }
+        }
+        render();
+      }
+    };
+
+    function render() {
+      if (!gridState) return;
+
+      const { grid, agents } = gridState;
+      const rows = grid.length;
+      const cols = grid[0]?.length || 0;
+
+      const cellSize = canvas.width / cols;
+
+      // Clear canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Draw grid
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          const cell = grid[y][x];
+          const px = x * cellSize;
+          const py = y * cellSize;
+
+          // Cell background
+          if (cell === 0) {
+            ctx.fillStyle = '#fff';
+          } else if (cell === 1) {
+            ctx.fillStyle = '#333';
+          } else if (cell === 2) {
+            ctx.fillStyle = '#4caf50';
+          }
+
+          ctx.fillRect(px, py, cellSize, cellSize);
+
+          // Grid lines
+          ctx.strokeStyle = '#ddd';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(px, py, cellSize, cellSize);
+        }
+      }
+
+      // Draw agents
+      if (agents) {
+        for (const agent of agents) {
+          let x = agent.position.x;
+          let y = agent.position.y;
+
+          // Check if animating
+          const anim = animatingAgents.get(agent.id);
+          if (anim && anim.progress < 1) {
+            // Interpolate position
+            x = anim.from.x + (anim.to.x - anim.from.x) * anim.progress;
+            y = anim.from.y + (anim.to.y - anim.from.y) * anim.progress;
+            anim.progress += 0.1;
+
+            if (anim.progress >= 1) {
+              animatingAgents.delete(agent.id);
+            }
+          }
+
+          const cx = x * cellSize + cellSize / 2;
+          const cy = y * cellSize + cellSize / 2;
+          const radius = cellSize * 0.35;
+
+          // Agent circle
+          ctx.fillStyle = agent.color || '#2196f3';
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Agent border
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 3;
+          ctx.stroke();
+
+          // Agent label
+          ctx.fillStyle = '#fff';
+          ctx.font = `bold ${cellSize * 0.25}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(agent.id.slice(0, 2).toUpperCase(), cx, cy);
+        }
+      }
+
+      // Continue animation loop if needed
+      if (animatingAgents.size > 0) {
+        requestAnimationFrame(render);
+      }
+    }
+
+    // Initial render
+    render();
+  </script>
+</body>
+</html>

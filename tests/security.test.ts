@@ -122,6 +122,7 @@ describe('Security: Resource Authorization', () => {
       creator_agent: 'agent-a',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
+      version: 1,
       permissions: {
         read: ['agent-a'],
         write: ['agent-a']
@@ -161,6 +162,7 @@ describe('Security: Resource Authorization', () => {
       creator_agent: 'agent-a',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
+      version: 1,
       permissions: {
         read: ['agent-a'],
         write: ['agent-a']
@@ -217,6 +219,7 @@ describe('Security: Resource Authorization', () => {
       creator_agent: 'agent-a',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
+      version: 1,
       permissions: {
         read: ['*'],
         write: ['agent-a']
@@ -274,6 +277,7 @@ describe('Security: Resource Authorization', () => {
       creator_agent: 'creator',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
+      version: 1,
       permissions: {
         read: ['*'],
         write: ['creator']
@@ -398,6 +402,7 @@ describe('Security: Payload Validation (Phase 2)', () => {
       creator_agent: 'agent-a',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
+      version: 1,
       permissions: {
         read: ['*'],
         write: ['agent-a']
@@ -444,6 +449,7 @@ describe('Security: Payload Validation (Phase 2)', () => {
       creator_agent: 'agent-a',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
+      version: 1,
       permissions: {
         read: ['*'],
         write: ['agent-a']
@@ -490,6 +496,7 @@ describe('Security: Payload Validation (Phase 2)', () => {
       creator_agent: 'agent-a',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
+      version: 1,
       permissions: {
         read: ['*'],
         write: ['agent-a']
