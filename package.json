@@ -3,11 +3,11 @@
   "version": "0.2.0",
   "description": "MCP server enabling multi-agent collaboration and coordination",
   "type": "module",
-  "main": "dist/index.js",
+  "main": "dist/src/index.js",
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "start": "node dist/index.js",
+    "start": "node dist/src/index.js",
     "lint": "eslint src",
     "config": "npm run build && node scripts/configure-mcp.js",
     "test": "npm run build && node --test dist/tests/security.test.js",

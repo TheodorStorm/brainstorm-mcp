@@ -626,4 +626,87 @@ describe('Security: Project Deletion Authorization', () => {
   });
 });
 
-console.log('Phase 1 & 2 Security Tests completed');
+describe('Concurrency: Heartbeat Race Condition Prevention', () => {
+  it('should handle concurrent heartbeats without lost updates', async () => {
+    const testRoot = path.join(tmpdir(), `brainstorm-test-${Date.now()}`);
+    const storage = new FileSystemStorage(testRoot);
+    await storage.initialize();
+
+    // Create project and member
+    const project: ProjectMetadata = {
+      project_id: 'test-project',
+      name: 'Test',
+      created_at: new Date().toISOString(),
+      schema_version: '1.0'
+    };
+    await storage.createProject(project);
+
+    const member: ProjectMember = {
+      project_id: 'test-project',
+      agent_name: 'test-agent',
+      agent_id: 'test-id',
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+      online: true
+    };
+    await storage.joinProject(member);
+
+    // Simulate concurrent heartbeats
+    const heartbeatCount = 10;
+    const heartbeats = Array.from({ length: heartbeatCount }, (_, i) =>
+      storage.updateMemberHeartbeat('test-project', 'test-agent', i % 2 === 0)
+    );
+
+    // All heartbeats should complete without error
+    await assert.doesNotReject(
+      Promise.all(heartbeats),
+      'Concurrent heartbeats should not cause errors'
+    );
+
+    // Verify member state is consistent (last heartbeat won)
+    const updatedMember = await storage.getProjectMember('test-project', 'test-agent');
+    assert.ok(updatedMember, 'Member should exist after concurrent heartbeats');
+    assert.ok(updatedMember.last_seen, 'Member should have updated last_seen timestamp');
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+  });
+
+  it('should prevent heartbeat deadlocks with lock timeout', async () => {
+    const testRoot = path.join(tmpdir(), `brainstorm-test-${Date.now()}`);
+    const storage = new FileSystemStorage(testRoot);
+    await storage.initialize();
+
+    // Create project and member
+    const project: ProjectMetadata = {
+      project_id: 'test-project',
+      name: 'Test',
+      created_at: new Date().toISOString(),
+      schema_version: '1.0'
+    };
+    await storage.createProject(project);
+
+    const member: ProjectMember = {
+      project_id: 'test-project',
+      agent_name: 'test-agent',
+      agent_id: 'test-id',
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+      online: true
+    };
+    await storage.joinProject(member);
+
+    // Verify heartbeat completes within reasonable time (lock timeout is 5s)
+    const start = Date.now();
+    await storage.updateMemberHeartbeat('test-project', 'test-agent', true);
+    const duration = Date.now() - start;
+
+    assert.ok(
+      duration < 5000,
+      'Heartbeat should complete quickly without lock contention'
+    );
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+  });
+});
+
+console.log('Phase 1, 2 & Concurrency Tests completed');

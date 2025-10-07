@@ -118,7 +118,7 @@ Default storage location: `~/.brainstorm`
   "mcpServers": {
     "brainstorm": {
       "command": "node",
-      "args": ["/absolute/path/to/brainstorm/dist/index.js"]
+      "args": ["/absolute/path/to/brainstorm/dist/src/index.js"]
     }
   }
 }

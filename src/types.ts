@@ -58,7 +58,6 @@ export interface ResourceManifest {
 }
 
 export interface SystemConfig {
-  server_version: string;
   storage_root: string;
   cleanup_interval_seconds: number;
   message_ttl_seconds: number;

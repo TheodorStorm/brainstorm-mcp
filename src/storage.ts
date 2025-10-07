@@ -37,7 +37,6 @@ export class FileSystemStorage {
       await fs.access(configPath);
     } catch {
       const defaultConfig: SystemConfig = {
-        server_version: '0.2.0',
         storage_root: this.root,
         cleanup_interval_seconds: 3600,
         message_ttl_seconds: 86400,
@@ -428,27 +427,36 @@ export class FileSystemStorage {
     this.assertSafeId(projectId, 'project_id');
     this.assertSafeId(agentName, 'agent_name');
 
-    const member = await this.getProjectMember(projectId, agentName);
-    if (!member) {
-      throw new NotFoundError(
-        'Member not found',
-        'MEMBER_NOT_FOUND',
-        { project_id: projectId, agent_name: agentName }
+    // Acquire lock to prevent race condition with concurrent heartbeats
+    const unlock = await this.acquireLock(`member-${projectId}-${agentName}`, {
+      reason: `heartbeat-update-${online ? 'online' : 'offline'}`,
+      timeout_ms: 5000
+    });
+    try {
+      const member = await this.getProjectMember(projectId, agentName);
+      if (!member) {
+        throw new NotFoundError(
+          'Member not found',
+          'MEMBER_NOT_FOUND',
+          { project_id: projectId, agent_name: agentName }
+        );
+      }
+
+      member.last_seen = new Date().toISOString();
+      member.online = online;
+
+      const memberPath = path.join(
+        this.root,
+        'projects',
+        projectId,
+        'members',
+        `${agentName}.json`
       );
+
+      await this.atomicWrite(memberPath, JSON.stringify(member, null, 2));
+    } finally {
+      await unlock();
     }
-
-    member.last_seen = new Date().toISOString();
-    member.online = online;
-
-    const memberPath = path.join(
-      this.root,
-      'projects',
-      projectId,
-      'members',
-      `${agentName}.json`
-    );
-
-    await this.atomicWrite(memberPath, JSON.stringify(member, null, 2));
   }
 
   // ============================================================================

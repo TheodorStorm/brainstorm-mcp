@@ -142,13 +142,23 @@ export class AgentCoopServer {
         },
         {
           name: 'get_project_info',
-          description: 'Get project metadata and list of members. Use this to see project context and who else is in the project.',
+          description: 'Get project metadata and list of members. Use this to see project context and who else is in the project. Supports waiting for project creation.',
           inputSchema: {
             type: 'object',
             properties: {
               project_id: {
                 type: 'string',
                 description: 'Project ID to query'
+              },
+              wait: {
+                type: 'boolean',
+                description: 'If true, wait for project to be created if it doesn\'t exist yet (long-polling)'
+              },
+              timeout_seconds: {
+                type: 'number',
+                description: 'Maximum seconds to wait when wait=true (default: 90, max: 900)',
+                minimum: 1,
+                maximum: 900
               }
             },
             required: ['project_id']
@@ -310,7 +320,7 @@ export class AgentCoopServer {
         },
         {
           name: 'get_resource',
-          description: 'Retrieve a shared resource from the project',
+          description: 'Retrieve a shared resource from the project. Supports waiting for resource creation.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -325,6 +335,16 @@ export class AgentCoopServer {
               agent_name: {
                 type: 'string',
                 description: 'Your agent name (for permission check)'
+              },
+              wait: {
+                type: 'boolean',
+                description: 'If true, wait for resource to be created if it doesn\'t exist yet (long-polling)'
+              },
+              timeout_seconds: {
+                type: 'number',
+                description: 'Maximum seconds to wait when wait=true (default: 90, max: 900)',
+                minimum: 1,
+                maximum: 900
               }
             },
             required: ['project_id', 'resource_id', 'agent_name']
@@ -478,7 +498,82 @@ export class AgentCoopServer {
 
           case 'get_project_info': {
             const projectId = args.project_id as string;
+            const wait = args.wait as boolean || false;
 
+            // Get timeout settings from system config
+            const config = await this.storage.getSystemConfig();
+            const defaultTimeout = config?.default_long_poll_timeout_seconds || 90;
+            const maxTimeout = config?.max_long_poll_timeout_seconds || 900;
+            const timeoutSeconds = Math.min(args.timeout_seconds as number || defaultTimeout, maxTimeout);
+
+            // Long-polling: wait for project to be created
+            if (wait) {
+              // DoS protection: limit concurrent long-polling connections
+              const pollKey = `get_project:${projectId}`;
+              const currentPolls = this.activeLongPolls.get(pollKey) || 0;
+
+              if (currentPolls >= this.MAX_CONCURRENT_POLLS) {
+                return {
+                  content: [{
+                    type: 'text',
+                    text: JSON.stringify({
+                      error: 'Too many concurrent requests'
+                    })
+                  }],
+                  isError: true
+                };
+              }
+
+              // Increment counter
+              this.activeLongPolls.set(pollKey, currentPolls + 1);
+
+              try {
+                const startTime = Date.now();
+                const timeoutMs = timeoutSeconds * 1000;
+                const pollIntervalMs = 1000; // Check every second
+
+                while (Date.now() - startTime < timeoutMs) {
+                  const metadata = await this.storage.getProjectMetadata(projectId);
+                  if (metadata) {
+                    const members = await this.storage.listProjectMembers(projectId);
+                    return {
+                      content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                          project: metadata,
+                          members: members,
+                          waited_ms: Date.now() - startTime
+                        }, null, 2)
+                      }]
+                    };
+                  }
+                  await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+                }
+
+                // Timeout - project never created
+                return {
+                  content: [{
+                    type: 'text',
+                    text: JSON.stringify({
+                      error: 'Project not found',
+                      waited_ms: Date.now() - startTime,
+                      timeout: true
+                    })
+                  }]
+                };
+              } finally {
+                // Decrement counter and cleanup
+                const current = this.activeLongPolls.get(pollKey) || 1;
+                const remaining = current - 1;
+                if (remaining <= 0) {
+                  this.activeLongPolls.delete(pollKey);
+                } else {
+                  this.activeLongPolls.set(pollKey, remaining);
+                }
+              }
+            }
+
+            // Standard non-blocking fetch
             const metadata = await this.storage.getProjectMetadata(projectId);
             if (!metadata) {
               return {
@@ -742,7 +837,104 @@ export class AgentCoopServer {
             const projectId = args.project_id as string;
             const resourceId = args.resource_id as string;
             const agentName = args.agent_name as string;
+            const wait = args.wait as boolean || false;
 
+            // Get timeout settings from system config
+            const config = await this.storage.getSystemConfig();
+            const defaultTimeout = config?.default_long_poll_timeout_seconds || 90;
+            const maxTimeout = config?.max_long_poll_timeout_seconds || 900;
+            const timeoutSeconds = Math.min(args.timeout_seconds as number || defaultTimeout, maxTimeout);
+
+            // Long-polling: wait for resource to be created
+            if (wait) {
+              // DoS protection: limit concurrent long-polling connections per resource
+              const pollKey = `get_resource:${projectId}:${resourceId}:${agentName}`;
+              const currentPolls = this.activeLongPolls.get(pollKey) || 0;
+
+              if (currentPolls >= this.MAX_CONCURRENT_POLLS) {
+                return {
+                  content: [{
+                    type: 'text',
+                    text: JSON.stringify({
+                      error: 'Too many concurrent requests'
+                    })
+                  }],
+                  isError: true
+                };
+              }
+
+              // Increment counter
+              this.activeLongPolls.set(pollKey, currentPolls + 1);
+
+              try {
+                const startTime = Date.now();
+                const timeoutMs = timeoutSeconds * 1000;
+                const pollIntervalMs = 1000; // Check every second
+
+                while (Date.now() - startTime < timeoutMs) {
+                  try {
+                    const result = await this.storage.getResource(projectId, resourceId, agentName);
+                    if (result) {
+                      let contentStr: string | undefined;
+                      if (result.payload) {
+                        contentStr = result.payload.toString('utf-8');
+                      }
+
+                      return {
+                        content: [{
+                          type: 'text',
+                          text: JSON.stringify({
+                            manifest: result.manifest,
+                            content: contentStr,
+                            waited_ms: Date.now() - startTime
+                          }, null, 2)
+                        }]
+                      };
+                    }
+                  } catch (error: unknown) {
+                    // Fail fast on validation and permission errors
+                    if (isUserError(error)) {
+                      const failFastCodes = [
+                        'NO_READ_PERMISSIONS',
+                        'READ_PERMISSION_DENIED',
+                        'INVALID_ID_FORMAT',
+                        'INVALID_ID_LENGTH',
+                        'PATH_TRAVERSAL_DETECTED'
+                      ];
+                      if (error.code && failFastCodes.includes(error.code)) {
+                        // Resource exists but access denied, or invalid input - return error immediately
+                        return this.formatError(error, name);
+                      }
+                    }
+                    // Otherwise continue polling (resource might not exist yet)
+                  }
+                  await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+                }
+
+                // Timeout - resource never created
+                return {
+                  content: [{
+                    type: 'text',
+                    text: JSON.stringify({
+                      error: 'Resource not found',
+                      waited_ms: Date.now() - startTime,
+                      timeout: true
+                    })
+                  }]
+                };
+              } finally {
+                // Decrement counter and cleanup
+                const current = this.activeLongPolls.get(pollKey) || 1;
+                const remaining = current - 1;
+                if (remaining <= 0) {
+                  this.activeLongPolls.delete(pollKey);
+                } else {
+                  this.activeLongPolls.set(pollKey, remaining);
+                }
+              }
+            }
+
+            // Standard non-blocking fetch
             const result = await this.storage.getResource(projectId, resourceId, agentName);
             if (!result) {
               return {
@@ -845,11 +1037,49 @@ export class AgentCoopServer {
     });
   }
 
+  private setupProcessHandlers(): void {
+    // Detect when Claude disconnects (stdin closes)
+    process.stdin.on('end', () => {
+      console.error('stdin closed - Claude disconnected, exiting...');
+      process.exit(0);
+    });
+
+    process.stdin.on('close', () => {
+      console.error('stdin stream closed - Claude disconnected, exiting...');
+      process.exit(0);
+    });
+
+    // Handle process termination signals
+    process.on('SIGTERM', () => {
+      console.error('Received SIGTERM, shutting down gracefully...');
+      process.exit(0);
+    });
+
+    process.on('SIGINT', () => {
+      console.error('Received SIGINT, shutting down gracefully...');
+      process.exit(0);
+    });
+
+    // Handle unexpected errors
+    process.on('uncaughtException', (error) => {
+      console.error('Uncaught exception:', error);
+      process.exit(1);
+    });
+
+    process.on('unhandledRejection', (reason) => {
+      console.error('Unhandled rejection:', reason);
+      process.exit(1);
+    });
+  }
+
   async run(): Promise<void> {
     await this.storage.initialize();
 
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
+
+    // Set up handlers to detect disconnection and exit gracefully
+    this.setupProcessHandlers();
 
     console.error('Brainstorm MCP server running on stdio');
   }

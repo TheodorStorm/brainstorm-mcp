@@ -125,11 +125,21 @@ Join a project with a friendly agent name. This is how agents register themselve
 ```
 
 #### `get_project_info`
-Get project metadata and list of members. Use this to see who's in the project and the shared context.
+Get project metadata and list of members. Use this to see who's in the project and the shared context. **Supports long-polling** to wait for project creation.
 
+**Standard fetch:**
 ```typescript
 {
   project_id: "api-redesign"
+}
+```
+
+**Wait for project creation:**
+```typescript
+{
+  project_id: "api-redesign",
+  wait: true,                    // Wait for project to be created
+  timeout_seconds: 60            // Max wait time (default: 90, max: 900)
 }
 ```
 
@@ -156,7 +166,8 @@ Get project metadata and list of members. Use this to see who's in the project a
       "online": true,
       "last_seen": "2025-01-15T10:04:00Z"
     }
-  ]
+  ],
+  "waited_ms": 2340              // Time waited (if using wait=true)
 }
 ```
 
@@ -318,13 +329,25 @@ Store a shared document or artifact in the project.
 ```
 
 #### `get_resource`
-Retrieve a shared resource.
+Retrieve a shared resource. **Supports long-polling** to wait for resource creation.
 
+**Standard fetch:**
 ```typescript
 {
   project_id: "api-redesign",
   resource_id: "graphql-schema",
   agent_name: "frontend"              // For permission check
+}
+```
+
+**Wait for resource creation:**
+```typescript
+{
+  project_id: "api-redesign",
+  resource_id: "graphql-schema",
+  agent_name: "frontend",
+  wait: true,                         // Wait for resource to be created
+  timeout_seconds: 60                 // Max wait time (default: 90, max: 900)
 }
 ```
 
@@ -338,7 +361,8 @@ Retrieve a shared resource.
     "created_at": "2025-01-15T10:00:00Z",
     "size_bytes": 1024
   },
-  "content": "type Query { ... }"
+  "content": "type Query { ... }",
+  "waited_ms": 1540                   // Time waited (if using wait=true)
 }
 ```
 
@@ -557,7 +581,7 @@ get_resource({
 
 1. **MCP Protocol Layer** (`src/server.ts`)
    - Implements MCP server over stdio transport
-   - Exposes 11 tools for project cooperation
+   - Exposes 13 tools for project cooperation
    - Handles request validation and error responses
 
 2. **Storage Abstraction Layer** (`src/storage.ts`)
@@ -615,8 +639,9 @@ Example secure resource:
 ```
 
 ### DoS Protection
-- **Connection limits**: Maximum 100 concurrent long-polling requests per agent
-- **Timeout enforcement**: 300-second maximum wait (configurable)
+- **Connection limits**: Maximum 100 concurrent long-polling requests per unique wait key
+- **Applies to**: All wait-enabled tools (`receive_messages`, `get_project_info`, `get_resource`)
+- **Timeout enforcement**: 900-second maximum wait (configurable, default: 90 seconds)
 - **Graceful degradation**: Excess requests receive errors instead of hanging
 
 ### Payload Validation
@@ -625,7 +650,9 @@ Example secure resource:
 - **Plain text support**: Non-JSON payloads pass through unchanged
 
 ### Additional Protections
-- **Race condition prevention**: Atomic file operations for project creation
+- **Race condition prevention**:
+  - Atomic file operations for project creation
+  - **Heartbeat updates use exclusive locking** (fixed in v0.2.0) - concurrent heartbeats safely serialized
 - **Error sanitization**: Internal paths never exposed in error messages
 - **Audit trail**: All actions logged to `system/audit.log` with timestamps
 - **Project isolation**: Agents cannot access other projects' data
@@ -638,7 +665,6 @@ The server creates a configuration file at `~/.brainstorm/system/config.json` on
 
 ```json
 {
-  "server_version": "0.2.0",
   "storage_root": "~/.brainstorm",
   "cleanup_interval_seconds": 3600,
   "message_ttl_seconds": 86400,
@@ -659,6 +685,40 @@ The server creates a configuration file at `~/.brainstorm/system/config.json` on
 - `heartbeat_timeout_seconds`: How long before agents marked offline (default: 5 min)
 
 Changes take effect immediately - no server restart required.
+
+## Known Limitations (v0.2)
+
+Brainstorm v0.2 is a **proof-of-concept** with intentional design trade-offs for simplicity. Be aware of these limitations:
+
+### **Scalability Limits**
+- **Recommended scale**: <100 agents per project, <10 messages/second
+- **Architecture**: File system storage with directory polling (1-second intervals)
+- **Bottlenecks**: Broadcast messages write N files sequentially; long-polling uses `fs.readdir()` every second
+- **No horizontal scaling**: In-memory state (`activeLongPolls`) and local filesystem locks prevent multi-node deployments
+
+### **Atomicity & Consistency**
+- **Broadcast messages**: Use best-effort delivery via `Promise.allSettled`. Partial failures can occur where some recipients receive the message while others don't. No automatic rollback or retry.
+- **Message ordering**: No causality guarantees. Messages are ordered by filesystem timestamps, which may not reflect true happens-before relationships in distributed scenarios.
+- **No deduplication**: Sending the same message twice creates duplicate entries (no idempotency keys).
+
+### **Operational Gaps**
+- **No storage quotas**: Agents can create unlimited messages/resources (disk exhaustion possible)
+- **No audit log rotation**: `system/audit.log` grows unbounded
+- **No graceful shutdown**: Server doesn't clean up locks or notify agents on termination
+- **No observability**: Minimal logging, no metrics, no health checks
+
+### **Concurrency**
+- **Single-node only**: Filesystem locks work only on same machine; activeLongPolls is in-memory
+- **Lock stale timeout**: 30 seconds (configurable) - crashed processes leave locks until timeout
+
+### **Migration Path to Production**
+
+For production use, we recommend migrating to a database backend (SQLite/PostgreSQL). The architecture is migration-ready:
+- All file operations map to SQL queries (see [CLAUDE.md](CLAUDE.md) for details)
+- UUIDs become primary keys, JSON files become tables
+- Filesystem locks → row-level locks or optimistic concurrency
+
+**Timeline**: SQLite backend planned for v0.3 to remove filesystem limitations while preserving zero-external-dependency simplicity.
 
 ## Migration Path
 
@@ -745,7 +805,3 @@ Perfect for understanding how agents cooperate!
 - Check storage path permissions: `~/.brainstorm`
 - Verify Node.js version (requires Node 18+)
 - Check MCP configuration in `~/.claude/mcp_config.json`
-
-## License
-
-MIT
