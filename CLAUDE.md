@@ -101,11 +101,12 @@ Default storage location: `~/.brainstorm`
 - Debug logging for stale lock removal
 
 **Permission Model** (v0.2.0 - Deny-by-Default):
-- Resources **must** have explicit `permissions` field with `read` and `write` arrays
+- Resources **must** have explicit `permissions` field with `read` and `write` arrays when created
 - Resources without permissions are rejected (no implicit access)
 - `"*"` in read array grants public read access
 - Write permission checks verify caller is in original resource's `write` array
 - Permission checks happen in storage layer before any operation
+- **Permissions are immutable**: On resource updates, existing permissions are automatically preserved (cannot be changed)
 
 ## MCP Configuration
 

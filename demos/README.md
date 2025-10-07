@@ -43,6 +43,29 @@ cd demos/pathfinding
 
 **Full documentation:** [pathfinding/README.md](./pathfinding/README.md)
 
+---
+
+### 🔬 Research Consensus
+
+Three specialized research agents collaborate to investigate a topic, make evidence-based claims, challenge each other, and converge on agreed statements.
+
+**Quick start:**
+```bash
+# Terminal 1: Lead Researcher
+cd demos/research-consensus
+./researcher-1.sh
+
+# Terminal 2: Skeptic Researcher
+cd demos/research-consensus
+./researcher-2.sh
+
+# Terminal 3: Data Researcher
+cd demos/research-consensus
+./researcher-3.sh
+```
+
+**Full documentation:** [research-consensus/README.md](./research-consensus/README.md)
+
 ## What These Demos Show
 
 - ✅ Project creation and joining
@@ -98,5 +121,7 @@ Make it executable: `chmod +x your-agent-1.sh`
 - 📊 **Data Pipeline** - Agents process data in stages
 - 🎯 **Scavenger Hunt** - Agents solve puzzles cooperatively
 - 🏗️ **Build Coordination** - Frontend, backend, and ops agents coordinate a deployment
+- 💬 **Debate Tournament** - Agents argue different positions and vote
+- 🧪 **Scientific Hypothesis Testing** - Agents design experiments and analyze results
 
 Contributions welcome!

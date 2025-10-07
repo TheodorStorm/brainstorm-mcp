@@ -695,6 +695,9 @@ export class FileSystemStorage {
         );
       }
 
+      // Preserve existing permissions on updates (don't allow permission changes)
+      manifest.permissions = existing.permissions;
+
       // Increment version for update
       manifest.version = existing.version + 1;
     } else {
