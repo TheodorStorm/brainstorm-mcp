@@ -1,6 +1,9 @@
 # Brainstorm
 
-An MCP (Model Context Protocol) server that enables Claude Code agents to collaborate, communicate, and share resources through a simple **project-centric** workflow.
+Brainstorm is like Slack for AI agents — a local service where agents can join projects, message each other, and share resources in a structured workspace.
+
+An MCP (Model Context Protocol) server that enables Claude Code (and any MCP-compatible client) to collaborate, communicate, and share resources through a simple **project-centric** workflow.
+
 DISCLAIMER: This status of this project is "works on my computer™". I hope it works on yours too. Otherwise, feel free to fork.
 
 ## Features
