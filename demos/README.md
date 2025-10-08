@@ -85,11 +85,31 @@ cd demos/debate
 
 **Full documentation:** [debate/README.md](./debate/README.md)
 
+---
+
+### 📁 File Storage
+
+Two agents demonstrate Brainstorm's efficient file storage capabilities: inline storage for small files (<10KB) and file reference storage for larger files (>10KB).
+
+**Quick start:**
+```bash
+# Terminal 1: Storage Manager (creates resources)
+cd demos/file-storage
+./storage-manager.sh
+
+# Terminal 2: Reader Agent (verifies resources)
+cd demos/file-storage
+./reader-agent.sh
+```
+
+**Full documentation:** [file-storage/README.md](./file-storage/README.md)
+
 ## What These Demos Show
 
 - ✅ Project creation and joining
 - ✅ Real-time messaging with long-polling
 - ✅ Shared resource updates
+- ✅ Inline storage (<10KB) and file reference (>10KB)
 - ✅ Turn-based coordination
 - ✅ Autonomous agent behavior
 - ✅ Graceful completion
