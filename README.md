@@ -34,9 +34,12 @@ npm run config
 
 This will build the project and add the server to `~/.claude/mcp_config.json`. Restart Claude Code to activate.
 
-## Run the Tic-Tac-Toe Demo
+## Run the Demos
 
-See agent cooperation in action! Two Claude Code agents play tic-tac-toe together.
+See agent cooperation in action! Multiple demos showcase different collaboration patterns.
+
+### 🎮 Tic-Tac-Toe
+Two Claude Code agents play tic-tac-toe together.
 
 **Terminal 1 (Player X):**
 ```bash
@@ -50,7 +53,26 @@ cd demos/tic-tac-toe
 ./player-o.sh
 ```
 
-The agents will automatically coordinate moves, update the shared game board, and play until completion. See `demos/tic-tac-toe/TIC-TAC-TOE-DEMO.md` for details.
+The agents will automatically coordinate moves, update the shared game board, and play until completion. See [demos/tic-tac-toe/TIC-TAC-TOE-DEMO.md](demos/tic-tac-toe/TIC-TAC-TOE-DEMO.md) for details.
+
+### 🗣️ Debate
+Two agents debate opposite stances until reaching evidence-based consensus.
+
+**Terminal 1 (Agent A - PRO):**
+```bash
+cd demos/debate
+./agent-a.sh
+```
+
+**Terminal 2 (Agent B - CON):**
+```bash
+cd demos/debate
+./agent-b.sh
+```
+
+Agents use web search to find evidence, challenge each other's arguments, and refine positions until consensus. See [demos/debate/README.md](demos/debate/README.md) for details.
+
+**More demos:** See [demos/README.md](demos/README.md) for the complete list including pathfinding and research consensus.
 
 ## Manual Configuration
 
@@ -707,9 +729,9 @@ The server creates a configuration file at `~/.brainstorm/system/config.json` on
 
 Changes take effect immediately - no server restart required.
 
-## Known Limitations (v0.2)
+## Known Limitations
 
-Brainstorm v0.2 is a **proof-of-concept** with intentional design trade-offs for simplicity. Be aware of these limitations:
+Brainstorm is a **proof-of-concept** with intentional design trade-offs for simplicity. Be aware of these limitations:
 
 ### **Scalability Limits**
 - **Recommended scale**: <100 agents per project, <10 messages/second
@@ -785,27 +807,24 @@ Comprehensive security test suite with 16 tests covering:
 
 All tests pass on Node.js 18+. Run `npm test` before submitting changes.
 
-See [demos/tic-tac-toe/](demos/tic-tac-toe/) for a complete working example of two agents coordinating through the MCP server.
+## Demos
 
-## Demo
+Want to see agent cooperation in action? We have several interactive demos:
 
-Want to see agent cooperation in action? Try the **Tic-Tac-Toe Demo**!
+- **🎮 [Tic-Tac-Toe](demos/tic-tac-toe/)** - Two agents play a game together
+- **🗣️ [Debate](demos/debate/)** - Agents debate opposing stances until reaching consensus
+- **🐜 [Pathfinding](demos/pathfinding/)** - Multiple agents navigate a maze with live visualization
+- **🔬 [Research Consensus](demos/research-consensus/)** - Three agents collaborate on research
 
-Two Claude Code agents play tic-tac-toe together, coordinating moves through the MCP server:
-
-```bash
-cd demos/tic-tac-toe/
-cat TIC-TAC-TOE-DEMO.md
-```
-
-The demo shows:
+Each demo shows different collaboration patterns:
 - Project creation and joining
 - Real-time messaging with long-polling
-- Shared resource updates (game board)
+- Shared resource updates
 - Turn-based coordination
-- Graceful game completion
+- Evidence-based consensus building
+- Autonomous agent behavior
 
-Perfect for understanding how agents cooperate!
+See [demos/README.md](demos/README.md) for complete documentation.
 
 ## Troubleshooting
 
