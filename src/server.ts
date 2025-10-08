@@ -174,7 +174,7 @@ export class AgentCoopServer {
         },
         {
           name: 'send_message',
-          description: 'Send a message to another agent in the project or broadcast to all members',
+          description: 'Send a message to another agent in the project or broadcast to all members. **IMPORTANT**: You must explicitly set response_expected. If true, immediately call receive_messages(wait=true) to listen for the response. If false, this is a fire-and-forget message.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -199,6 +199,10 @@ export class AgentCoopServer {
                 enum: ['request', 'response', 'event'],
                 description: 'Message type'
               },
+              response_expected: {
+                type: 'boolean',
+                description: 'REQUIRED: True if you expect a response (must immediately call receive_messages), false for fire-and-forget'
+              },
               payload: {
                 type: 'object',
                 description: 'Message content'
@@ -208,12 +212,12 @@ export class AgentCoopServer {
                 description: 'Optional metadata (priority, trace_id)'
               }
             },
-            required: ['project_id', 'from_agent', 'type', 'payload']
+            required: ['project_id', 'from_agent', 'type', 'response_expected', 'payload']
           }
         },
         {
           name: 'receive_messages',
-          description: 'Get messages from your inbox. Supports long-polling to wait for new messages.',
+          description: 'Get messages from your inbox. Supports long-polling to wait for new messages. **IMPORTANT**: If a message has response_expected=true, you must send a response back to the sender.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -625,6 +629,22 @@ export class AgentCoopServer {
             const fromAgent = args.from_agent as string;
             const toAgent = args.to_agent as string | undefined;
             const broadcast = args.broadcast as boolean || false;
+            const responseExpected = args.response_expected;
+
+            // Validate response_expected is explicitly set
+            if (typeof responseExpected !== 'boolean') {
+              return {
+                content: [{
+                  type: 'text',
+                  text: JSON.stringify({
+                    error: 'response_expected must be explicitly set to true or false',
+                    code: 'RESPONSE_EXPECTED_REQUIRED',
+                    details: { provided: responseExpected }
+                  })
+                }],
+                isError: true
+              };
+            }
 
             // Validate message has exactly one target
             const hasToAgent = toAgent !== undefined && toAgent !== null && toAgent !== '';
@@ -671,6 +691,7 @@ export class AgentCoopServer {
               to_agent: toAgent,
               broadcast: broadcast,
               type: args.type as 'request' | 'response' | 'event',
+              response_expected: responseExpected,
               payload: args.payload,
               created_at: new Date().toISOString(),
               metadata: args.metadata as Message['metadata']

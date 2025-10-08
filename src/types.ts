@@ -31,6 +31,7 @@ export interface Message {
   to_agent?: string; // agent_name within project (for direct messages)
   broadcast?: boolean; // if true, send to all project members
   type: 'request' | 'response' | 'event';
+  response_expected: boolean; // v0.4.0: Must be explicitly set - if true, sender should immediately listen for response
   payload: unknown;
   created_at: string;
   ttl?: number;
