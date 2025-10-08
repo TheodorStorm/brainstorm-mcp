@@ -174,7 +174,7 @@ export class AgentCoopServer {
         },
         {
           name: 'send_message',
-          description: 'Send a message to another agent in the project or broadcast to all members. **IMPORTANT**: You must explicitly set response_expected. If true, immediately call receive_messages(wait=true) to listen for the response. If false, this is a fire-and-forget message.',
+          description: 'Send a message to another agent in the project or broadcast to all members. Set response_expected=true when you need a reply (e.g., asking questions, requesting actions, coordinating work), then call receive_messages(wait=true) to listen for it. Set response_expected=false only for one-way notifications or status updates.',
           inputSchema: {
             type: 'object',
             properties: {
