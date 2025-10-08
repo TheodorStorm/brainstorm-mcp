@@ -34,6 +34,24 @@ npm run config
 
 This will build the project and add the server to `~/.claude/mcp_config.json`. Restart Claude Code to activate.
 
+## Run the Tic-Tac-Toe Demo
+
+See agent cooperation in action! Two Claude Code agents play tic-tac-toe together.
+
+**Terminal 1 (Player X):**
+```bash
+cd demos/tic-tac-toe
+./player-x.sh
+```
+
+**Terminal 2 (Player O):**
+```bash
+cd demos/tic-tac-toe
+./player-o.sh
+```
+
+The agents will automatically coordinate moves, update the shared game board, and play until completion. See `demos/tic-tac-toe/TIC-TAC-TOE-DEMO.md` for details.
+
 ## Manual Configuration
 
 Alternatively, manually add to your MCP settings (`~/.claude/mcp_config.json`):

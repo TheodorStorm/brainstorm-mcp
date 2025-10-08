@@ -9,7 +9,7 @@
     "dev": "tsc --watch",
     "start": "node dist/src/index.js",
     "lint": "eslint src",
-    "config": "npm run build && node scripts/configure-mcp.js",
+    "config": "npm install && npm run build && node scripts/configure-mcp.js",
     "test": "npm run build && node --test dist/tests/security.test.js",
     "cleanup": "node scripts/cleanup-project.js"
   },
