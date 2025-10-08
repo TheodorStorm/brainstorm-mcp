@@ -119,7 +119,6 @@ describe('Security: Resource Authorization', () => {
       project_id: 'test-project',
       resource_id: 'secret-data',
       name: 'Secret Data',
-      creator_agent: 'agent-a',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       etag: "test-etag-1",
@@ -128,7 +127,7 @@ describe('Security: Resource Authorization', () => {
         write: ['agent-a']
       }
     };
-    await storage.storeResource(manifest, 'secret content');
+    await storage.storeResource(manifest, 'agent-a', 'secret content');
 
     // Now manually remove permissions from the manifest file to simulate undefined permissions
     const manifestPath = `/tmp/brainstorm-test-${Date.now()}/projects/test-project/resources/secret-data/manifest.json`;
@@ -159,7 +158,6 @@ describe('Security: Resource Authorization', () => {
       project_id: 'test-project',
       resource_id: 'test-resource',
       name: 'Test',
-      creator_agent: 'agent-a',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       etag: "test-etag-1",
@@ -167,7 +165,7 @@ describe('Security: Resource Authorization', () => {
         read: ['agent-a'],
         write: ['agent-a']
       }
-    }, 'content');
+    }, 'agent-a', 'content');
 
     // Manually corrupt the manifest by removing permissions
     const resourceManifestPath = path.join(testRoot2, 'projects', 'test-project', 'resources', 'test-resource', 'manifest.json');
@@ -216,7 +214,6 @@ describe('Security: Resource Authorization', () => {
       project_id: 'test-project',
       resource_id: 'public-data',
       name: 'Public Data',
-      creator_agent: 'agent-a',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       etag: "test-etag-1",
@@ -225,7 +222,7 @@ describe('Security: Resource Authorization', () => {
         write: ['agent-a']
       }
     };
-    await storage.storeResource(manifest, 'public content');
+    await storage.storeResource(manifest, 'agent-a', 'public content');
 
     // Should allow access
     const result = await storage.getResource('test-project', 'public-data', 'agent-a');
@@ -274,7 +271,6 @@ describe('Security: Resource Authorization', () => {
       project_id: 'test-project',
       resource_id: 'protected',
       name: 'Protected Resource',
-      creator_agent: 'creator',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       etag: "test-etag-1",
@@ -283,16 +279,17 @@ describe('Security: Resource Authorization', () => {
         write: ['creator']
       }
     };
-    await storage.storeResource(manifest, 'original');
+    await storage.storeResource(manifest, 'creator', 'original');
 
-    // Attacker tries to update
+    // Attacker tries to update (read first to get etag)
+    const current = await storage.getResource('test-project', 'protected', 'attacker');
     const maliciousUpdate: ResourceManifest = {
       ...manifest,
-      creator_agent: 'attacker' // Attacker claims to be updating
+      etag: current?.manifest.etag || ''
     };
 
     await assert.rejects(
-      () => storage.storeResource(maliciousUpdate, 'hacked'),
+      () => storage.storeResource(maliciousUpdate, 'attacker', 'hacked'),
       { message: /insufficient write permissions/ },
       'Should reject write from unauthorized agent'
     );
@@ -399,7 +396,6 @@ describe('Security: Payload Validation (Phase 2)', () => {
       project_id: 'test-project',
       resource_id: 'json-bomb',
       name: 'JSON Bomb',
-      creator_agent: 'agent-a',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       etag: "test-etag-1",
@@ -410,7 +406,7 @@ describe('Security: Payload Validation (Phase 2)', () => {
     };
 
     await assert.rejects(
-      () => storage.storeResource(manifest, JSON.stringify(deeplyNested)),
+      () => storage.storeResource(manifest, 'agent-a', JSON.stringify(deeplyNested)),
       { message: /JSON nesting exceeds maximum depth/ },
       'Should reject JSON exceeding 100 levels of nesting'
     );
@@ -446,7 +442,6 @@ describe('Security: Payload Validation (Phase 2)', () => {
       project_id: 'test-project',
       resource_id: 'plain-text',
       name: 'Plain Text',
-      creator_agent: 'agent-a',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       etag: "test-etag-1",
@@ -458,7 +453,7 @@ describe('Security: Payload Validation (Phase 2)', () => {
 
     // Should accept plain text without trying to parse as JSON
     await assert.doesNotReject(
-      () => storage.storeResource(manifest, 'This is plain text content'),
+      () => storage.storeResource(manifest, 'agent-a', 'This is plain text content'),
       'Should accept plain text payloads'
     );
 
@@ -493,7 +488,6 @@ describe('Security: Payload Validation (Phase 2)', () => {
       project_id: 'test-project',
       resource_id: 'valid-json',
       name: 'Valid JSON',
-      creator_agent: 'agent-a',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       etag: "test-etag-1",
@@ -512,7 +506,7 @@ describe('Security: Payload Validation (Phase 2)', () => {
     });
 
     await assert.doesNotReject(
-      () => storage.storeResource(manifest, validPayload),
+      () => storage.storeResource(manifest, 'agent-a', validPayload),
       'Should accept shallow JSON payloads'
     );
 
@@ -710,6 +704,171 @@ describe('Concurrency: Heartbeat Race Condition Prevention', () => {
     assert.ok(
       duration < 5000,
       'Heartbeat should complete quickly without lock contention'
+    );
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+  });
+
+  it('should preserve metadata on permission-only updates', async () => {
+    const testRoot = path.join(tmpdir(), `brainstorm-test-${Date.now()}`);
+    const storage = new FileSystemStorage(testRoot);
+    await storage.initialize();
+
+    // Setup
+    const project: ProjectMetadata = {
+      project_id: 'test-project',
+      name: 'Test',
+      created_at: new Date().toISOString(),
+      schema_version: '1.0'
+    };
+    await storage.createProject(project);
+
+    const member: ProjectMember = {
+      project_id: 'test-project',
+      agent_name: 'agent-a',
+      agent_id: 'id-a',
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+      online: true
+    };
+    await storage.joinProject(member);
+
+    // Create resource with content
+    const manifest: ResourceManifest = {
+      project_id: 'test-project',
+      resource_id: 'test-resource',
+      name: 'Test Resource',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      etag: '',
+      permissions: {
+        read: ['agent-a'],
+        write: ['agent-a']
+      }
+    };
+    await storage.storeResource(manifest, 'agent-a', 'test content');
+
+    // Read resource to get metadata
+    const result = await storage.getResource('test-project', 'test-resource', 'agent-a');
+    assert.ok(result, 'Resource should exist');
+    const { manifest: stored } = result;
+    const originalSizeBytes = stored.size_bytes;
+    const originalEtag = stored.etag;
+
+    // Update permissions only (no content)
+    const updateManifest: ResourceManifest = {
+      ...stored,
+      permissions: {
+        read: ['*'],
+        write: ['agent-a']
+      }
+    };
+    await storage.storeResource(updateManifest, 'agent-a');
+
+    // Verify metadata was preserved
+    const updateResult = await storage.getResource('test-project', 'test-resource', 'agent-a');
+    assert.ok(updateResult, 'Updated resource should exist');
+    const { manifest: updated } = updateResult;
+
+    assert.strictEqual(
+      updated.size_bytes,
+      originalSizeBytes,
+      'size_bytes should be preserved when updating permissions only'
+    );
+    assert.notStrictEqual(
+      updated.etag,
+      originalEtag,
+      'etag should change on permission update'
+    );
+    assert.deepStrictEqual(
+      updated.permissions,
+      { read: ['*'], write: ['agent-a'] },
+      'permissions should be updated'
+    );
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+  });
+
+  it('should handle legacy resources without creator_agent', async () => {
+    const testRoot = path.join(tmpdir(), `brainstorm-test-${Date.now()}`);
+    const storage = new FileSystemStorage(testRoot);
+    await storage.initialize();
+
+    // Setup
+    const project: ProjectMetadata = {
+      project_id: 'test-project',
+      name: 'Test',
+      created_at: new Date().toISOString(),
+      schema_version: '1.0'
+    };
+    await storage.createProject(project);
+
+    const member: ProjectMember = {
+      project_id: 'test-project',
+      agent_name: 'agent-a',
+      agent_id: 'id-a',
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+      online: true
+    };
+    await storage.joinProject(member);
+
+    // Create legacy resource by manually writing file without creator_agent
+    const resourceDir = path.join(testRoot, 'projects', 'test-project', 'resources', 'legacy-resource');
+    await fs.mkdir(resourceDir, { recursive: true });
+
+    const legacyManifest = {
+      resource_id: 'legacy-resource',
+      project_id: 'test-project',
+      name: 'Legacy Resource',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      etag: 'legacy-etag-1',
+      size_bytes: 12,
+      permissions: {
+        read: ['*'],
+        write: ['agent-a']
+      }
+      // Note: no creator_agent field
+    };
+    await fs.writeFile(
+      path.join(resourceDir, 'manifest.json'),
+      JSON.stringify(legacyManifest, null, 2)
+    );
+
+    // Create payload directory and data file
+    const payloadDir = path.join(resourceDir, 'payload');
+    await fs.mkdir(payloadDir, { recursive: true });
+    await fs.writeFile(
+      path.join(payloadDir, 'data'),
+      'test content'
+    );
+
+    // Read legacy resource
+    const readResult = await storage.getResource('test-project', 'legacy-resource', 'agent-a');
+    assert.ok(readResult, 'Legacy resource should exist');
+    const { manifest: read } = readResult;
+
+    // Update permissions on legacy resource
+    const updateManifest: ResourceManifest = {
+      ...read,
+      permissions: {
+        read: ['*'],
+        write: ['agent-a', 'agent-b']
+      }
+    };
+
+    // Should not throw - should backfill creator_agent with agent-a
+    await storage.storeResource(updateManifest, 'agent-a');
+
+    // Verify update succeeded and creator was backfilled
+    const updatedResult = await storage.getResource('test-project', 'legacy-resource', 'agent-a');
+    assert.ok(updatedResult, 'Updated legacy resource should exist');
+    const { manifest: updated } = updatedResult;
+    assert.deepStrictEqual(
+      updated.permissions,
+      { read: ['*'], write: ['agent-a', 'agent-b'] },
+      'permissions should be updated on legacy resource'
     );
 
     await fs.rm(testRoot, { recursive: true, force: true });

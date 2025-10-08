@@ -286,9 +286,9 @@ export class AgentCoopServer {
                 type: 'string',
                 description: 'Resource description'
               },
-              creator_agent: {
+              agent_name: {
                 type: 'string',
-                description: 'Your agent name'
+                description: 'Your agent name within the project'
               },
               content: {
                 type: 'string',
@@ -322,7 +322,7 @@ export class AgentCoopServer {
                 }
               }
             },
-            required: ['project_id', 'resource_id', 'name', 'creator_agent']
+            required: ['project_id', 'resource_id', 'name', 'agent_name']
           }
         },
         {
@@ -804,12 +804,13 @@ export class AgentCoopServer {
           }
 
           case 'store_resource': {
+            const agentName = args.agent_name as string;
             const manifest: ResourceManifest = {
               resource_id: args.resource_id as string,
               project_id: args.project_id as string,
               name: args.name as string,
               description: args.description as string | undefined,
-              creator_agent: args.creator_agent as string,
+              // creator_agent is NOT set here - storage layer sets it internally
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString(),
               etag: args.etag as string | undefined || '', // Will be set by storage layer
@@ -821,11 +822,11 @@ export class AgentCoopServer {
             const content = args.content as string | undefined;
             const localPath = args.local_path as string | undefined;
 
-            await this.storage.storeResource(manifest, content, localPath);
+            await this.storage.storeResource(manifest, agentName, content, localPath);
 
             await this.storage.auditLog({
               timestamp: new Date().toISOString(),
-              actor: manifest.creator_agent,
+              actor: agentName,
               action: 'store_resource',
               target: manifest.resource_id,
               details: {

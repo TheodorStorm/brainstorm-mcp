@@ -5,6 +5,29 @@ All notable changes to Brainstorm MCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.5.0] - 2025-10-08
+
+### Changed
+- **BREAKING**: Renamed `creator_agent` parameter to `agent_name` in `store_resource` tool
+  - Consistent with all other tools (join_project, send_message, etc.)
+  - Clearer semantics: identifies who is performing the operation
+  - `creator_agent` field now set internally by storage layer
+  - Agents cannot set `creator_agent` - validation error if attempted
+  - `creator_agent` field is never exposed to agents (security: prevent identity spoofing)
+- **BREAKING**: Resource creators can now update permissions on their resources
+  - Non-creators cannot change permissions (silently preserved)
+  - `creator_agent` field is immutable (always preserved from original)
+  - Legacy resources without `creator_agent` are backfilled on first update
+
+### Fixed
+- Fixed metadata preservation on permission-only updates
+  - Storage-managed fields (`size_bytes`, `source_path`, `mime_type`) now preserved when updating permissions without new content
+- Fixed legacy resource handling
+  - Resources created before `creator_agent` field existed can now have permissions updated
+  - `creator_agent` is backfilled with the first updating agent
+
 ## [0.4.0] - 2025-10-08
 
 ### Added

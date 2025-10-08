@@ -40,12 +40,12 @@ export interface Message {
   };
 }
 
+// External API type - what agents send/receive (no creator_agent)
 export interface ResourceManifest {
   resource_id: string;
   project_id: string;
   name: string;
   description?: string;
-  creator_agent: string; // agent_name within project
   created_at: string;
   updated_at: string;
   etag: string; // Optimistic locking tag - pass back exactly what you received
@@ -57,6 +57,11 @@ export interface ResourceManifest {
     write: string[]; // agent_names
   };
   metadata?: Record<string, unknown>;
+}
+
+// Internal storage type - includes creator_agent (never exposed to agents)
+export interface StoredResourceManifest extends ResourceManifest {
+  creator_agent: string; // Internal only - who created this resource
 }
 
 export interface SystemConfig {

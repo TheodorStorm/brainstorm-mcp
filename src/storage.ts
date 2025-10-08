@@ -11,6 +11,7 @@ import type {
   ProjectMember,
   Message,
   ResourceManifest,
+  StoredResourceManifest,
   SystemConfig
 } from './types.js';
 import {
@@ -668,7 +669,7 @@ export class FileSystemStorage {
     return maxDepth;
   }
 
-  private async getResourceManifestOnly(projectId: string, resourceId: string): Promise<ResourceManifest | null> {
+  private async getResourceManifestOnly(projectId: string, resourceId: string): Promise<StoredResourceManifest | null> {
     try {
       const manifestPath = path.join(
         this.root,
@@ -679,7 +680,7 @@ export class FileSystemStorage {
         'manifest.json'
       );
       const content = await fs.readFile(manifestPath, 'utf-8');
-      const manifest = JSON.parse(content) as ResourceManifest;
+      const manifest = JSON.parse(content) as StoredResourceManifest;
 
       // Backwards compatibility: migrate from version to etag
       if (!manifest.etag) {
@@ -699,9 +700,18 @@ export class FileSystemStorage {
     }
   }
 
-  async storeResource(manifest: ResourceManifest, payload?: string | Buffer, localPath?: string): Promise<void> {
+  async storeResource(manifest: ResourceManifest, agentName: string, payload?: string | Buffer, localPath?: string): Promise<void> {
     this.assertSafeId(manifest.project_id, 'project_id');
     this.assertSafeId(manifest.resource_id, 'resource_id');
+
+    // Security: Agents must NEVER include creator_agent - it's internal only
+    if ('creator_agent' in manifest) {
+      throw new ValidationError(
+        'Cannot include creator_agent field. This is an internal field managed by the storage layer.',
+        'INVALID_PARAMETER',
+        { field: 'creator_agent' }
+      );
+    }
 
     // Mutual exclusion: cannot specify both content and local_path
     if (payload && localPath) {
@@ -722,59 +732,92 @@ export class FileSystemStorage {
       );
     }
 
-    // Verify creator exists
-    const creator = await this.getProjectMember(manifest.project_id, manifest.creator_agent);
-    if (!creator) {
+    // Track who is performing this operation
+    const operatingAgent = agentName;
+
+    // Verify operating agent exists in project
+    const agent = await this.getProjectMember(manifest.project_id, operatingAgent);
+    if (!agent) {
       throw new NotFoundError(
-        'Creator not found in project',
-        'CREATOR_NOT_FOUND',
-        { project_id: manifest.project_id, agent_name: manifest.creator_agent }
+        'Agent not found in project',
+        'AGENT_NOT_FOUND',
+        { project_id: manifest.project_id, agent_name: operatingAgent }
       );
     }
 
-    // Check write permissions and version if updating existing resource
+    // Check write permissions if updating existing resource
     const existing = await this.getResourceManifestOnly(manifest.project_id, manifest.resource_id);
+
+    // Create internal manifest with creator_agent
+    const storedManifest: StoredResourceManifest = {
+      ...manifest,
+      creator_agent: '' // Will be set below
+    };
+
     if (existing) {
       const permissions = existing.permissions;
       if (!permissions || !permissions.write) {
         throw new PermissionError(
           'Access denied: no write permissions defined',
           'NO_WRITE_PERMISSIONS',
-          { resource_id: manifest.resource_id }
+          { resource_id: storedManifest.resource_id }
         );
       }
-      if (!permissions.write.includes('*') && !permissions.write.includes(manifest.creator_agent)) {
+      if (!permissions.write.includes('*') && !permissions.write.includes(operatingAgent)) {
         throw new PermissionError(
           'Access denied: insufficient write permissions',
           'WRITE_PERMISSION_DENIED',
-          { resource_id: manifest.resource_id, agent_name: manifest.creator_agent }
+          { resource_id: storedManifest.resource_id, agent_name: operatingAgent }
         );
       }
 
       // Optimistic locking: check etag matches
-      if (manifest.etag !== undefined && manifest.etag !== existing.etag) {
+      if (storedManifest.etag !== undefined && storedManifest.etag !== existing.etag) {
         throw new ConflictError(
           'Resource has been modified by another agent. Re-read the resource to get the latest etag and data, then retry.',
           'ETAG_MISMATCH',
           {
-            resource_id: manifest.resource_id
+            resource_id: storedManifest.resource_id
           }
         );
       }
 
-      // Preserve existing fields on updates
-      manifest.permissions = existing.permissions;
-      manifest.created_at = existing.created_at; // Don't change creation time
+      // Preserve immutable fields on updates
+      // Handle legacy resources: backfill creator_agent if missing
+      storedManifest.creator_agent = existing.creator_agent || operatingAgent; // Creator never changes (or set on first update if missing)
+      storedManifest.created_at = existing.created_at; // Creation time never changes
+
+      // Preserve storage-managed metadata fields when not being updated
+      // These fields are set by storage layer based on content/local_path operations
+      if (!payload && !localPath) {
+        // No content update - preserve all storage-managed fields
+        storedManifest.source_path = existing.source_path;
+        storedManifest.size_bytes = existing.size_bytes;
+        storedManifest.mime_type = existing.mime_type || storedManifest.mime_type;
+      }
+
+      // Allow creator to update permissions, otherwise preserve existing
+      // Use the backfilled creator_agent (handles legacy resources)
+      if (storedManifest.creator_agent === operatingAgent) {
+        // Creator can update permissions if provided
+        if (!storedManifest.permissions) {
+          storedManifest.permissions = existing.permissions;
+        }
+      } else {
+        // Non-creator cannot change permissions
+        storedManifest.permissions = existing.permissions;
+      }
 
       // Update timestamp and etag for modification
-      manifest.updated_at = new Date().toISOString();
-      manifest.etag = createHash('sha256')
+      storedManifest.updated_at = new Date().toISOString();
+      storedManifest.etag = createHash('sha256')
         .update(`${Date.now()}-${randomUUID()}`)
         .digest('hex')
         .substring(0, 16);
     } else {
-      // New resource gets initial etag
-      manifest.etag = createHash('sha256')
+      // New resource: set creator and initial etag
+      storedManifest.creator_agent = operatingAgent;
+      storedManifest.etag = createHash('sha256')
         .update(`${Date.now()}-${randomUUID()}`)
         .digest('hex')
         .substring(0, 16);
@@ -785,11 +828,11 @@ export class FileSystemStorage {
       await this.assertSafePath(localPath, 'local_path');
 
       // Store the absolute path in manifest
-      manifest.source_path = path.resolve(localPath);
+      storedManifest.source_path = path.resolve(localPath);
 
       // Get file size for metadata
-      const stats = await fs.stat(manifest.source_path);
-      manifest.size_bytes = stats.size;
+      const stats = await fs.stat(storedManifest.source_path);
+      storedManifest.size_bytes = stats.size;
     }
 
     // Validate payload
@@ -818,7 +861,7 @@ export class FileSystemStorage {
           { size, limit: maxSize }
         );
       }
-      manifest.size_bytes = size;
+      storedManifest.size_bytes = size;
 
       // Validate JSON structure if string payload looks like JSON
       if (typeof payload === 'string') {
@@ -855,15 +898,15 @@ export class FileSystemStorage {
     const resourceDir = path.join(
       this.root,
       'projects',
-      manifest.project_id,
+      storedManifest.project_id,
       'resources',
-      manifest.resource_id
+      storedManifest.resource_id
     );
 
     await fs.mkdir(resourceDir, { recursive: true });
 
     const manifestPath = path.join(resourceDir, 'manifest.json');
-    await this.atomicWrite(manifestPath, JSON.stringify(manifest, null, 2));
+    await this.atomicWrite(manifestPath, JSON.stringify(storedManifest, null, 2));
 
     if (payload) {
       const payloadDir = path.join(resourceDir, 'payload');
@@ -897,22 +940,22 @@ export class FileSystemStorage {
       );
 
       const content = await fs.readFile(manifestPath, 'utf-8');
-      const manifest = JSON.parse(content) as ResourceManifest;
+      const storedManifest = JSON.parse(content) as StoredResourceManifest;
 
       // Backwards compatibility: migrate from version to etag
-      if (!manifest.etag) {
-        manifest.etag = createHash('sha256')
+      if (!storedManifest.etag) {
+        storedManifest.etag = createHash('sha256')
           .update(`${Date.now()}-${randomUUID()}`)
           .digest('hex')
           .substring(0, 16);
         // Remove old version field
-        delete (manifest as any).version;
+        delete (storedManifest as any).version;
         // Save the updated manifest back to disk
-        await this.atomicWrite(manifestPath, JSON.stringify(manifest, null, 2));
+        await this.atomicWrite(manifestPath, JSON.stringify(storedManifest, null, 2));
       }
 
       // Check read permissions - default deny
-      const permissions = manifest.permissions;
+      const permissions = storedManifest.permissions;
       if (!permissions || !permissions.read) {
         throw new PermissionError(
           'Access denied: no permissions defined',
@@ -949,6 +992,9 @@ export class FileSystemStorage {
       } catch {
         // No payload or payload not readable
       }
+
+      // Strip creator_agent before returning to agents (security: prevent identity spoofing)
+      const { creator_agent, ...manifest } = storedManifest;
 
       return { manifest, payload };
     } catch (err: any) {
