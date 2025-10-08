@@ -31,7 +31,7 @@ export class AgentCoopServer {
     this.server = new Server(
       {
         name: 'brainstorm',
-        version: '0.2.0'
+        version: '0.4.0'
       },
       {
         capabilities: {
@@ -267,7 +267,7 @@ export class AgentCoopServer {
         },
         {
           name: 'store_resource',
-          description: 'Store a shared resource or document in the project. For updates, include the current version to prevent conflicts.',
+          description: 'Store a shared resource or document in the project. **Local storage only - no network transfer costs.** Maximum payload size: 1MB (configurable via BRAINSTORM_MAX_PAYLOAD_SIZE). For large files (>100KB), consider storing file paths instead of content to avoid context window limits. For updates, include the current version to prevent conflicts.',
           inputSchema: {
             type: 'object',
             properties: {

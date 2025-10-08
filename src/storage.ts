@@ -42,7 +42,7 @@ export class FileSystemStorage {
         message_ttl_seconds: 86400,
         heartbeat_timeout_seconds: 300,
         lock_stale_timeout_ms: 30000,
-        max_resource_size_bytes: 10 * 1024 * 1024,
+        max_resource_size_bytes: 1 * 1024 * 1024, // 1MB - realistic for agent context windows
         max_long_poll_timeout_seconds: 900,
         default_long_poll_timeout_seconds: 90
       };
@@ -710,15 +710,22 @@ export class FileSystemStorage {
       // Check size limit
       const size = Buffer.isBuffer(payload) ? payload.length : Buffer.byteLength(payload);
       const config = await this.getSystemConfig();
-      const maxSize = config?.max_resource_size_bytes || (10 * 1024 * 1024);
+      // Default to 1MB if not configured, allow env override
+      const maxSize = config?.max_resource_size_bytes ||
+        parseInt(process.env.BRAINSTORM_MAX_PAYLOAD_SIZE || '1048576', 10);
       if (size > maxSize) {
         throw new ValidationError(
-          `Resource exceeds maximum size of ${maxSize} bytes`,
+          `Resource exceeds maximum size of ${maxSize} bytes (${(maxSize / 1024).toFixed(0)}KB). Consider using file references for large datasets.`,
           'RESOURCE_TOO_LARGE',
           { size, limit: maxSize }
         );
       }
       manifest.size_bytes = size;
+
+      // Log warnings for files >100KB (approaching context limits)
+      if (size > 100 * 1024) {
+        console.log(`[Brainstorm] Warning: Storing large payload (${(size / 1024).toFixed(0)}KB) for resource ${manifest.resource_id}. Consider file references for better performance.`);
+      }
 
       // Validate JSON structure if string payload looks like JSON
       if (typeof payload === 'string') {

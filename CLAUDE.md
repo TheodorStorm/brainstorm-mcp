@@ -27,6 +27,9 @@ npm test
 # Run with custom storage path
 BRAINSTORM_STORAGE=/path/to/storage npm start
 
+# Run with custom payload size limit (default: 1MB)
+BRAINSTORM_MAX_PAYLOAD_SIZE=2097152 npm start  # 2MB
+
 # Auto-configure in Claude Code (builds + updates ~/.claude/mcp_config.json)
 npm run config
 
@@ -127,7 +130,7 @@ Default storage location: `~/.brainstorm`
 
 The configuration script (`scripts/configure-mcp.js`) handles building the project and updating the config file with the correct absolute path.
 
-## Security (v0.2.0)
+## Security (v0.4.0)
 
 All user-controlled identifiers are validated to prevent security vulnerabilities:
 
@@ -148,7 +151,8 @@ All user-controlled identifiers are validated to prevent security vulnerabilitie
 - **Payload Validation**: JSON bombs are prevented
   - Maximum 100 levels of JSON nesting
   - Plain text payloads pass through unchanged
-  - Size limit: 10MB (configurable)
+  - Size limit: 1MB (configurable via BRAINSTORM_MAX_PAYLOAD_SIZE)
+  - Warning logged for payloads >100KB (approaching context limits)
 
 - **Race Condition Prevention**: Atomic file system operations
   - `fs.mkdir(path, { recursive: false })` for check-and-create atomicity
