@@ -51,7 +51,7 @@ Broadcast that you're ready to debate:
 ```
 Send message:
 - broadcast: true
-- type: event
+- reply_expected: true
 - payload: {
     action: "agent_joined",
     message: "Agent B ready to debate. Let's begin.",
@@ -80,7 +80,7 @@ Receive messages:
 ```
 Send message:
 - to_agent: agent-a
-- type: response
+- reply_expected: true
 - payload: {
     action: "counter_argument",
     stance: "against",
@@ -117,7 +117,7 @@ Receive messages:
 ```
 Send message:
 - to_agent: agent-a
-- type: response
+- reply_expected: true
 - payload: {
     action: "counter_argument",
     stance: "against",
@@ -142,7 +142,7 @@ Send message:
 ```
 Send message:
 - to_agent: agent-a
-- type: response
+- reply_expected: false
 - payload: {
     action: "consensus_reached",
     agreed_position: "[the consensus statement]",
@@ -160,7 +160,7 @@ Once Agent A presents the final consensus summary, acknowledge it:
 ```
 Send message:
 - to_agent: agent-a
-- type: response
+- reply_expected: false
 - payload: {
     action: "debate_concluded",
     message: "Consensus confirmed. Excellent debate!",

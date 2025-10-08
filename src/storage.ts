@@ -5,7 +5,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import type {
   ProjectMetadata,
   ProjectMember,
@@ -679,7 +679,21 @@ export class FileSystemStorage {
         'manifest.json'
       );
       const content = await fs.readFile(manifestPath, 'utf-8');
-      return JSON.parse(content) as ResourceManifest;
+      const manifest = JSON.parse(content) as ResourceManifest;
+
+      // Backwards compatibility: migrate from version to etag
+      if (!manifest.etag) {
+        manifest.etag = createHash('sha256')
+          .update(`${Date.now()}-${randomUUID()}`)
+          .digest('hex')
+          .substring(0, 16);
+        // Remove old version field
+        delete (manifest as any).version;
+        // Save the updated manifest back to disk
+        await this.atomicWrite(manifestPath, JSON.stringify(manifest, null, 2));
+      }
+
+      return manifest;
     } catch {
       return null;
     }
@@ -737,27 +751,33 @@ export class FileSystemStorage {
         );
       }
 
-      // Optimistic locking: check version matches
-      if (manifest.version !== undefined && manifest.version !== existing.version) {
+      // Optimistic locking: check etag matches
+      if (manifest.etag !== undefined && manifest.etag !== existing.etag) {
         throw new ConflictError(
-          'Resource has been modified by another agent. Read the latest version and retry.',
-          'VERSION_CONFLICT',
+          'Resource has been modified by another agent. Re-read the resource to get the latest etag and data, then retry.',
+          'ETAG_MISMATCH',
           {
-            resource_id: manifest.resource_id,
-            expected_version: manifest.version,
-            current_version: existing.version
+            resource_id: manifest.resource_id
           }
         );
       }
 
-      // Preserve existing permissions on updates (don't allow permission changes)
+      // Preserve existing fields on updates
       manifest.permissions = existing.permissions;
+      manifest.created_at = existing.created_at; // Don't change creation time
 
-      // Increment version for update
-      manifest.version = existing.version + 1;
+      // Update timestamp and etag for modification
+      manifest.updated_at = new Date().toISOString();
+      manifest.etag = createHash('sha256')
+        .update(`${Date.now()}-${randomUUID()}`)
+        .digest('hex')
+        .substring(0, 16);
     } else {
-      // New resource starts at version 1
-      manifest.version = 1;
+      // New resource gets initial etag
+      manifest.etag = createHash('sha256')
+        .update(`${Date.now()}-${randomUUID()}`)
+        .digest('hex')
+        .substring(0, 16);
     }
 
     // Handle local_path (file reference)
@@ -878,6 +898,18 @@ export class FileSystemStorage {
 
       const content = await fs.readFile(manifestPath, 'utf-8');
       const manifest = JSON.parse(content) as ResourceManifest;
+
+      // Backwards compatibility: migrate from version to etag
+      if (!manifest.etag) {
+        manifest.etag = createHash('sha256')
+          .update(`${Date.now()}-${randomUUID()}`)
+          .digest('hex')
+          .substring(0, 16);
+        // Remove old version field
+        delete (manifest as any).version;
+        // Save the updated manifest back to disk
+        await this.atomicWrite(manifestPath, JSON.stringify(manifest, null, 2));
+      }
 
       // Check read permissions - default deny
       const permissions = manifest.permissions;

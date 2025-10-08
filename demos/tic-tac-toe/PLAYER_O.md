@@ -121,7 +121,7 @@ Get the [board-id-from-message] resource from project tic-tac-toe
    ```
    Send message with:
    - to_agent: player-x
-   - type: event
+   - reply_expected: true
    - payload: {
        move: [row, col],
        message: "First move advantage! I've claimed position [row, col]. Watch and learn, Player X!"
@@ -211,7 +211,7 @@ When you receive a message:
     ```
     Send message with:
     - to_agent: player-x
-    - type: event
+    - reply_expected: true
     - payload: {
         move: [row, col],
         message: [pick based on move type below]

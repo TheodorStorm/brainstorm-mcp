@@ -88,7 +88,7 @@ Broadcast project initialization:
 ```
 Send message:
 - broadcast: true
-- type: event
+- reply_expected: true
 - payload: {
     action: "project_initialized",
     message: "Research project on Alpacas ready. All agents please join.",
@@ -110,7 +110,7 @@ When researcher-2 and researcher-3 have joined, proceed.
 **Your approach:** Start with foundational, well-established facts. Focus on biological basics or clear historical facts.
 
 **Process:**
-1. Read `claims-pending` to get current version
+1. Read `claims-pending` to get current etag
 2. Add your claim to the claims array:
    ```json
    {
@@ -124,7 +124,7 @@ When researcher-2 and researcher-3 have joined, proceed.
      "refinements": []
    }
    ```
-3. Store with version number
+3. Store with etag number
 4. Broadcast `claim_proposed` message (see RESEARCH_PROTOCOL.md for payload format)
 
 ### 5. Review Loop - Respond to Messages
@@ -190,7 +190,7 @@ See RESEARCH_PROTOCOL.md section "Turn-Based Coordination" for the full rules.
 
 When all three agents have sent `claim_agreed` for a claim, **YOU** must move it:
 
-1. Read both `claims-pending` (with version) and `claims-agreed` (with version)
+1. Read both `claims-pending` (with etag) and `claims-agreed` (with etag)
 2. Find the claim in claims-pending
 3. Remove it from claims-pending.claims array
 4. Add it to claims-agreed.claims array with:
@@ -234,7 +234,7 @@ Progress Update:
 ```
 Send message:
 - broadcast: true
-- type: event
+- reply_expected: true
 - payload: {
     action: "research_complete_proposed",
     proposed_by: "researcher-1",
@@ -250,7 +250,7 @@ When you or another agent proposes completion, evaluate and vote:
 
 ```
 Send message:
-- type: response
+- reply_expected: false
 - payload: {
     action: "vote_research_complete",
     vote: "yes" or "no",
@@ -342,7 +342,7 @@ Thank you for participating in this collaborative research project!
 ```
 Send message:
 - broadcast: true
-- type: event
+- reply_expected: true
 - payload: {
     action: "research_concluded",
     message: "Final consensus presented. Excellent collaboration!"

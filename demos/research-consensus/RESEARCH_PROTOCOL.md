@@ -332,7 +332,7 @@ When updating shared resources:
    store_resource(
      resource_id: "claims-pending",
      content: { "claims": [...] },  // No version field here
-     version: 5  // Pass the version you read earlier
+     etag: 5  // Pass the etag you received earlier
    )
    ```
 
@@ -345,7 +345,7 @@ When updating shared resources:
    - **DO NOT** proceed to wait for messages or continue with other tasks
    - **IMMEDIATELY** handle the conflict with these steps:
 
-   a. **Re-read the resource** to get the latest state and version:
+   a. **Re-read the resource** to get the latest state and etag:
       ```
       get_resource(resource_id: "claims-pending")
       → Note the NEW version number from the response
@@ -381,14 +381,14 @@ When updating shared resources:
 
 **Merge Example:**
 ```
-Step 1: Read claims-pending (version: 5)
+Step 1: Read claims-pending (etag: 5)
 Step 2: You want to add challenge to claim-5
-Step 3: Try to store with version: 5
+Step 3: Try to store with etag: 5
 Step 4: ERROR - version conflict! (someone else updated to version 6)
-Step 5: Re-read claims-pending (version: 6)
+Step 5: Re-read claims-pending (etag: 6)
         - claim-5 now has a refinement from researcher-3
 Step 6: Merge - add your challenge to challenges array alongside their refinement
-Step 7: Store with version: 6
+Step 7: Store with etag: 6
 Step 8: SUCCESS - resource is now version 7
 ```
 

@@ -110,7 +110,7 @@ Broadcast that you're ready:
 ```
 Send message:
 - broadcast: true
-- type: event
+- reply_expected: true
 - payload: {
     action: "agent_joined",
     agent: "researcher-3",
@@ -164,7 +164,7 @@ Receive messages:
    - ✅ No precision improvements needed
 
 5. **Update evidence-base** if claim cites new sources:
-   - Read `evidence-base` to get current version
+   - Read `evidence-base` to get current etag
    - Check if source already exists (by URL/title)
    - Add new source with quality rating:
      ```json
@@ -179,7 +179,7 @@ Receive messages:
        "notes": "[context from zen:chat research]"
      }
      ```
-   - Store with version (handle conflicts per protocol)
+   - Store with etag (handle conflicts per protocol)
 
 6. **Respond** with appropriate action
 
@@ -190,7 +190,7 @@ When data is accurate and precise:
 ```
 Send message:
 - broadcast: true
-- type: event
+- reply_expected: true
 - payload: {
     action: "claim_agreed",
     claim_id: "[claim-id]",
@@ -246,7 +246,7 @@ When researcher-1 and researcher-2 disagree:
    ```
    Send message:
    - broadcast: true
-   - type: event
+   - reply_expected: true
    - payload: {
        action: "mediation_ruling",
        claim_id: "[claim-id]",

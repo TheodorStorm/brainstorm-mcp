@@ -109,7 +109,7 @@ Parameters:
   - project_id: "pathfinding-demo"
   - from_agent: "ant-1" (your agent name)
   - to_agent: "manager"
-  - type: "request"
+  - reply_expected: true
   - payload: {
       action: "move",
       agent_id: "ant-1",
@@ -201,7 +201,7 @@ if (!isWall && !isOccupied) {
     project_id: "pathfinding-demo",
     from_agent: "ant-1",
     to_agent: "manager",
-    type: "request",
+    reply_expected: true,
     payload: {
       action: "move",
       agent_id: "ant-1",

@@ -1,3 +1,3 @@
 # Debate Topic
 
-The earth is round.
+God exists.

@@ -107,7 +107,7 @@ Broadcast that you're ready:
 ```
 Send message:
 - broadcast: true
-- type: event
+- reply_expected: true
 - payload: {
     action: "agent_joined",
     agent: "researcher-2",
@@ -169,7 +169,7 @@ researcher-1 will propose the first claim.
 When evidence is weak or claim is vague:
 
 1. **Update `claims-pending`** with your challenge:
-   - Read current version
+   - Read current etag
    - Find the claim
    - Add to its `challenges` array:
      ```json
@@ -181,13 +181,13 @@ When evidence is weak or claim is vague:
        "severity": "major" or "minor"
      }
      ```
-   - Store with version (handle conflicts per protocol)
+   - Store with etag (handle conflicts per protocol)
 
 2. **Broadcast challenge message:**
    ```
    Send message:
    - broadcast: true
-   - type: event
+   - reply_expected: true
    - payload: {
        action: "claim_challenged",
        claim_id: "[claim-id]",
@@ -230,7 +230,7 @@ When evidence is strong and WebSearch confirms it:
 ```
 Send message:
 - broadcast: true
-- type: event
+- reply_expected: true
 - payload: {
     action: "claim_agreed",
     claim_id: "[claim-id]",
@@ -251,7 +251,7 @@ After a claim reaches consensus and it's your turn:
 1. **Announce your turn:**
    ```
    Send message:
-   - type: event
+   - reply_expected: true
    - payload: {
        action: "research_turn",
        agent: "researcher-2",
@@ -262,7 +262,7 @@ After a claim reaches consensus and it's your turn:
 2. **Do WebSearch** to find well-evidenced facts
 
 3. **Propose your claim:**
-   - Add to `claims-pending` (read current version first)
+   - Add to `claims-pending` (read current etag first)
    - Include strong evidence from your WebSearch
    - Cite specific URLs
    - Broadcast `claim_proposed` message

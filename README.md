@@ -255,7 +255,7 @@ Send a message to another agent or broadcast to all project members.
   project_id: "api-redesign",
   from_agent: "frontend",
   to_agent: "backend",           // Target agent by name
-  type: "request",               // request | response | event
+  reply_expected: true,          // Will you wait for a reply?
   payload: {
     action: "review_schema",
     schema_url: "https://..."
@@ -273,7 +273,7 @@ Send a message to another agent or broadcast to all project members.
   project_id: "api-redesign",
   from_agent: "backend",
   broadcast: true,               // Send to all members
-  type: "event",
+  reply_expected: false,         // Fire-and-forget notification
   payload: {
     status: "schema_updated",
     version: "2.0"
@@ -319,7 +319,7 @@ Get messages from your inbox. Supports **long-polling** for efficient real-time 
       "message_id": "msg-...",
       "from_agent": "backend",
       "to_agent": "frontend",
-      "type": "response",
+      "reply_expected": true,
       "payload": { "status": "approved" },
       "created_at": "2025-01-15T10:06:00Z"
     }
@@ -470,7 +470,7 @@ send_message({
   project_id: "api-v2-migration",
   from_agent: "frontend",
   to_agent: "backend",
-  type: "request",
+  reply_expected: true,
   payload: {
     action: "review_schema",
     resource_id: "proposed-schema"
@@ -500,7 +500,7 @@ send_message({
   project_id: "api-v2-migration",
   from_agent: "backend",
   to_agent: "frontend",
-  type: "response",
+  reply_expected: false,
   payload: {
     status: "approved",
     resource_id: "approved-schema-v2"
@@ -534,7 +534,7 @@ send_message({
   project_id: "incident-2025-01-15",
   from_agent: "monitoring",
   broadcast: true,
-  type: "event",
+  reply_expected: false,
   payload: {
     alert: "Error rate exceeded 50%",
     service: "auth",
@@ -548,7 +548,7 @@ send_message({
   project_id: "incident-2025-01-15",
   from_agent: "backend",
   broadcast: true,
-  type: "event",
+  reply_expected: false,
   payload: {
     action: "hotfix_deployed",
     commit: "abc123",

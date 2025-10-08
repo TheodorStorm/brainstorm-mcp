@@ -14,16 +14,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Path validation ensures files are within home directory and readable
   - Mutual exclusion: cannot specify both `content` and `local_path`
   - Helpful error messages guide agents to use correct parameter
-- **Message flow management** with `response_expected` parameter
-  - Agents must explicitly set `response_expected: boolean` when sending messages
-  - If true, sender must immediately call `receive_messages(wait=true)`
-  - If false, fire-and-forget message with no response expected
+- **Message flow management** with `reply_expected` parameter
+  - Agents must explicitly set `reply_expected: boolean` when sending messages
+  - True: sender will call `receive_messages` to wait for a reply
+  - False: fire-and-forget message with no response expected
   - Prevents bugs where agents send requests but don't listen for responses
 
 ### Changed
+- **BREAKING**: Renamed `version` to `etag` for optimistic locking
+  - ETags are now random 16-char hex strings (not sequential numbers)
+  - Agents pass back exact ETag received (don't increment)
+  - Clearer semantics: "pass what you received" vs "version number"
+  - Automatic migration: existing resources get ETags on first read
+  - Error code changed from `VERSION_CONFLICT` to `ETAG_MISMATCH`
+- **BREAKING**: Removed `type` field from messages (was unused metadata that caused confusion with reply_expected)
 - Reduced maximum payload size from 10MB to 500KB (configurable via `BRAINSTORM_MAX_PAYLOAD_SIZE`)
 - Inline content in `store_resource` limited to 10KB
-- Updated tool descriptions with usage guidance for new parameters
+- Simplified tool descriptions for better agent comprehension
+- Updated all demos to use `reply_expected` instead of `type`
 
 ## [0.3.0] - 2025-10-08
 

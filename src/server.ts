@@ -174,7 +174,7 @@ export class AgentCoopServer {
         },
         {
           name: 'send_message',
-          description: 'Send a message to another agent in the project or broadcast to all members. Set response_expected=true when you need a reply (e.g., asking questions, requesting actions, coordinating work), then call receive_messages(wait=true) to listen for it. Set response_expected=false only for one-way notifications or status updates.',
+          description: 'Send a message to another agent in the project or broadcast to all members. Set reply_expected=true if you will wait for a response, false if not.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -194,14 +194,9 @@ export class AgentCoopServer {
                 type: 'boolean',
                 description: 'If true, send to all project members (do not use with to_agent)'
               },
-              type: {
-                type: 'string',
-                enum: ['request', 'response', 'event'],
-                description: 'Message type'
-              },
-              response_expected: {
+              reply_expected: {
                 type: 'boolean',
-                description: 'REQUIRED: True if you expect a response (must immediately call receive_messages), false for fire-and-forget'
+                description: 'True if you will call receive_messages to wait for a reply, false otherwise'
               },
               payload: {
                 type: 'object',
@@ -212,12 +207,12 @@ export class AgentCoopServer {
                 description: 'Optional metadata (priority, trace_id)'
               }
             },
-            required: ['project_id', 'from_agent', 'type', 'response_expected', 'payload']
+            required: ['project_id', 'from_agent', 'reply_expected', 'payload']
           }
         },
         {
           name: 'receive_messages',
-          description: 'Get messages from your inbox. Supports long-polling to wait for new messages. **IMPORTANT**: If a message has response_expected=true, you must send a response back to the sender.',
+          description: 'Get messages from your inbox. Supports long-polling to wait for new messages. If a message has reply_expected=true, you should send a response back to the sender.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -271,7 +266,7 @@ export class AgentCoopServer {
         },
         {
           name: 'store_resource',
-          description: 'Store a shared resource or document in the project. **Local storage only - no network transfer costs.** Use "content" for small data (<10KB) or "local_path" for file references (>10KB). Maximum inline content: 10KB. Maximum file size via local_path: 500KB (configurable via BRAINSTORM_MAX_PAYLOAD_SIZE). For updates, include the current version to prevent conflicts.',
+          description: 'Store a shared resource or document in the project. **Local storage only - no network transfer costs.** Use "content" for small data (<10KB) or "local_path" for file references (>10KB). Maximum inline content: 10KB. Maximum file size via local_path: 500KB (configurable via BRAINSTORM_MAX_PAYLOAD_SIZE). **For updates:** include the etag you received when you read the resource (pass it back unchanged) to prevent conflicts.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -307,9 +302,9 @@ export class AgentCoopServer {
                 type: 'string',
                 description: 'Content MIME type'
               },
-              version: {
-                type: 'number',
-                description: 'Current version for optimistic locking (required when updating existing resource). Omit for new resources.'
+              etag: {
+                type: 'string',
+                description: 'ETag from when you read the resource (required when updating). Pass back exactly what you received. Omit for new resources.'
               },
               permissions: {
                 type: 'object',
@@ -629,17 +624,17 @@ export class AgentCoopServer {
             const fromAgent = args.from_agent as string;
             const toAgent = args.to_agent as string | undefined;
             const broadcast = args.broadcast as boolean || false;
-            const responseExpected = args.response_expected;
+            const replyExpected = args.reply_expected;
 
-            // Validate response_expected is explicitly set
-            if (typeof responseExpected !== 'boolean') {
+            // Validate reply_expected is explicitly set
+            if (typeof replyExpected !== 'boolean') {
               return {
                 content: [{
                   type: 'text',
                   text: JSON.stringify({
-                    error: 'response_expected must be explicitly set to true or false',
-                    code: 'RESPONSE_EXPECTED_REQUIRED',
-                    details: { provided: responseExpected }
+                    error: 'reply_expected must be explicitly set to true or false',
+                    code: 'REPLY_EXPECTED_REQUIRED',
+                    details: { provided: replyExpected }
                   })
                 }],
                 isError: true
@@ -668,30 +663,13 @@ export class AgentCoopServer {
               };
             }
 
-            // Validate message type
-            const validMessageTypes = ['request', 'response', 'event'] as const;
-            if (!validMessageTypes.includes(args.type as any)) {
-              return {
-                content: [{
-                  type: 'text',
-                  text: JSON.stringify({
-                    error: 'Invalid message type',
-                    code: 'INVALID_MESSAGE_TYPE',
-                    details: { provided: args.type, allowed: validMessageTypes }
-                  })
-                }],
-                isError: true
-              };
-            }
-
             const message: Message = {
               message_id: randomUUID(),
               project_id: projectId,
               from_agent: fromAgent,
               to_agent: toAgent,
               broadcast: broadcast,
-              type: args.type as 'request' | 'response' | 'event',
-              response_expected: responseExpected,
+              reply_expected: replyExpected,
               payload: args.payload,
               created_at: new Date().toISOString(),
               metadata: args.metadata as Message['metadata']
@@ -834,7 +812,7 @@ export class AgentCoopServer {
               creator_agent: args.creator_agent as string,
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString(),
-              version: args.version as number | undefined || 0, // Will be set by storage layer
+              etag: args.etag as string | undefined || '', // Will be set by storage layer
               mime_type: args.mime_type as string | undefined,
               permissions: args.permissions as ResourceManifest['permissions'] | undefined,
               metadata: args.metadata as Record<string, unknown> | undefined

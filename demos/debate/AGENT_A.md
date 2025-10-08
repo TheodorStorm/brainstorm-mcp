@@ -78,7 +78,7 @@ Broadcast that the debate is ready:
 ```
 Send message:
 - broadcast: true
-- type: event
+- reply_expected: true
 - payload: {
     action: "debate_initialized",
     message: "Debate topic set. Agent B please join.",
@@ -106,7 +106,7 @@ When agent-b has joined, proceed.
 ```
 Send message:
 - to_agent: agent-b
-- type: request
+- reply_expected: true
 - payload: {
     action: "argument",
     stance: "for",
@@ -141,7 +141,7 @@ Receive messages:
 ```
 Send message:
 - to_agent: agent-b
-- type: response
+- reply_expected: true
 - payload: {
     action: "counter_argument",
     stance: "for",
@@ -165,7 +165,7 @@ Send message:
 ```
 Send message:
 - to_agent: agent-b
-- type: response
+- reply_expected: false
 - payload: {
     action: "consensus_reached",
     agreed_position: "[the consensus statement]",

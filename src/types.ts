@@ -30,8 +30,7 @@ export interface Message {
   from_agent: string; // agent_name within project
   to_agent?: string; // agent_name within project (for direct messages)
   broadcast?: boolean; // if true, send to all project members
-  type: 'request' | 'response' | 'event';
-  response_expected: boolean; // v0.4.0: Must be explicitly set - if true, sender should immediately listen for response
+  reply_expected: boolean; // v0.5.0: If true, sender will call receive_messages to wait for a reply
   payload: unknown;
   created_at: string;
   ttl?: number;
@@ -49,7 +48,7 @@ export interface ResourceManifest {
   creator_agent: string; // agent_name within project
   created_at: string;
   updated_at: string;
-  version: number; // Incremented on every write for optimistic locking
+  etag: string; // Optimistic locking tag - pass back exactly what you received
   mime_type?: string;
   size_bytes?: number;
   source_path?: string; // Absolute path for large file references (v0.4.0+)

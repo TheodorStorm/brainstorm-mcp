@@ -90,7 +90,7 @@ Send a message to Player O telling them which board to use:
 ```
 Send message with:
 - to_agent: player-o
-- type: event
+- reply_expected: true
 - payload: {
     board_id: "[your-unique-board-id]",
     message: "New game started! Please use board resource: [your-unique-board-id]"
@@ -163,7 +163,7 @@ When you receive a message:
     ```
     Send message with:
     - to_agent: player-o
-    - type: event
+    - reply_expected: true
     - payload: {
         move: [row, col],
         message: [pick based on move type below]
@@ -281,7 +281,7 @@ Consider:
    ```
    Send message with:
    - to_agent: player-o
-   - type: event
+   - reply_expected: true
    - payload: {
        message: "Great game! Let's play again. Same project, new board coming..."
      }
@@ -292,7 +292,7 @@ Consider:
    ```
    Send message with:
    - to_agent: player-o
-   - type: event
+   - reply_expected: true
    - payload: {
        board_id: "[new-board-id]",
        message: "New game! Board: [new-board-id]"
@@ -306,7 +306,7 @@ Consider:
    ```
    Send message with:
    - to_agent: player-o
-   - type: event
+   - reply_expected: true
    - payload: {
        message: "Great session! I think we've played enough games. Final score coming..."
      }

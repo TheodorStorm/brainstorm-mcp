@@ -83,7 +83,7 @@ Use `mcp__brainstorm__send_message`:
 - project_id: "pathfinding-demo"
 - from_agent: "manager"
 - to_agent: (the ant's agent_name)
-- type: "response"
+- reply_expected: false
 - payload: {success: true/false, reason: "...", new_position: {x, y}}
 
 ### 7. Acknowledge Message
