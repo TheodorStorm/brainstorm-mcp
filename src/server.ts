@@ -267,7 +267,7 @@ export class AgentCoopServer {
         },
         {
           name: 'store_resource',
-          description: 'Store a shared resource or document in the project. **Local storage only - no network transfer costs.** Maximum payload size: 1MB (configurable via BRAINSTORM_MAX_PAYLOAD_SIZE). For large files (>100KB), consider storing file paths instead of content to avoid context window limits. For updates, include the current version to prevent conflicts.',
+          description: 'Store a shared resource or document in the project. **Local storage only - no network transfer costs.** Use "content" for small data (<10KB) or "local_path" for file references (>10KB). Maximum inline content: 10KB. Maximum file size via local_path: 500KB (configurable via BRAINSTORM_MAX_PAYLOAD_SIZE). For updates, include the current version to prevent conflicts.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -293,7 +293,11 @@ export class AgentCoopServer {
               },
               content: {
                 type: 'string',
-                description: 'Resource content (text or base64)'
+                description: 'Inline resource content (<10KB). Use local_path for larger files.'
+              },
+              local_path: {
+                type: 'string',
+                description: 'Absolute path to file for large data (>10KB). File must be within home directory and readable.'
               },
               mime_type: {
                 type: 'string',
@@ -816,15 +820,19 @@ export class AgentCoopServer {
             };
 
             const content = args.content as string | undefined;
+            const localPath = args.local_path as string | undefined;
 
-            await this.storage.storeResource(manifest, content);
+            await this.storage.storeResource(manifest, content, localPath);
 
             await this.storage.auditLog({
               timestamp: new Date().toISOString(),
               actor: manifest.creator_agent,
               action: 'store_resource',
               target: manifest.resource_id,
-              details: { project_id: manifest.project_id }
+              details: {
+                project_id: manifest.project_id,
+                storage_type: localPath ? 'file_reference' : 'inline'
+              }
             });
 
             return {
@@ -832,7 +840,8 @@ export class AgentCoopServer {
                 type: 'text',
                 text: JSON.stringify({
                   success: true,
-                  resource_id: manifest.resource_id
+                  resource_id: manifest.resource_id,
+                  storage_type: localPath ? 'file_reference' : 'inline'
                 }, null, 2)
               }]
             };

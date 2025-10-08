@@ -51,6 +51,7 @@ export interface ResourceManifest {
   version: number; // Incremented on every write for optimistic locking
   mime_type?: string;
   size_bytes?: number;
+  source_path?: string; // Absolute path for large file references (v0.4.0+)
   permissions?: {
     read: string[]; // agent_names or '*'
     write: string[]; // agent_names

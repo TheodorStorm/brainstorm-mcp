@@ -4,6 +4,7 @@
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import * as os from 'os';
 import { randomUUID } from 'crypto';
 import type {
   ProjectMetadata,
@@ -42,7 +43,7 @@ export class FileSystemStorage {
         message_ttl_seconds: 86400,
         heartbeat_timeout_seconds: 300,
         lock_stale_timeout_ms: 30000,
-        max_resource_size_bytes: 1 * 1024 * 1024, // 1MB - realistic for agent context windows
+        max_resource_size_bytes: 500 * 1024, // 500KB - realistic for agent context windows
         max_long_poll_timeout_seconds: 900,
         default_long_poll_timeout_seconds: 90
       };
@@ -76,6 +77,51 @@ export class FileSystemStorage {
         `Invalid ${context}: length must be 1-256 characters`,
         'INVALID_ID_LENGTH',
         { field: context, length: id.length, min: 1, max: 256 }
+      );
+    }
+  }
+
+  private async assertSafePath(filePath: string, context: string): Promise<void> {
+    // Resolve to absolute path
+    const resolvedPath = path.resolve(filePath);
+
+    // Prevent path traversal sequences
+    if (filePath.includes('..') || filePath.includes('~')) {
+      throw new ValidationError(
+        `Invalid ${context}: path contains unsafe characters`,
+        'UNSAFE_PATH',
+        { field: context, provided: filePath }
+      );
+    }
+
+    // Ensure within home directory
+    const homedir = os.homedir();
+    if (!resolvedPath.startsWith(homedir)) {
+      throw new ValidationError(
+        `Invalid ${context}: path must be within home directory`,
+        'PATH_OUTSIDE_HOME',
+        { field: context, provided: filePath }
+      );
+    }
+
+    // Verify file exists and is readable
+    try {
+      await fs.access(resolvedPath, fs.constants.R_OK);
+    } catch {
+      throw new ValidationError(
+        `Invalid ${context}: file does not exist or is not readable`,
+        'FILE_NOT_ACCESSIBLE',
+        { field: context, provided: filePath }
+      );
+    }
+
+    // Check it's a regular file (not directory, socket, etc.)
+    const stats = await fs.stat(resolvedPath);
+    if (!stats.isFile()) {
+      throw new ValidationError(
+        `Invalid ${context}: path must point to a regular file`,
+        'NOT_A_FILE',
+        { field: context, provided: filePath }
       );
     }
   }
@@ -639,9 +685,18 @@ export class FileSystemStorage {
     }
   }
 
-  async storeResource(manifest: ResourceManifest, payload?: string | Buffer): Promise<void> {
+  async storeResource(manifest: ResourceManifest, payload?: string | Buffer, localPath?: string): Promise<void> {
     this.assertSafeId(manifest.project_id, 'project_id');
     this.assertSafeId(manifest.resource_id, 'resource_id');
+
+    // Mutual exclusion: cannot specify both content and local_path
+    if (payload && localPath) {
+      throw new ValidationError(
+        'Cannot specify both content and local_path. Use content for small data (<100KB) or local_path for file references.',
+        'CONFLICTING_PARAMETERS',
+        { has_content: true, has_local_path: true }
+      );
+    }
 
     // Verify project exists
     const project = await this.getProjectMetadata(manifest.project_id);
@@ -705,27 +760,45 @@ export class FileSystemStorage {
       manifest.version = 1;
     }
 
+    // Handle local_path (file reference)
+    if (localPath) {
+      await this.assertSafePath(localPath, 'local_path');
+
+      // Store the absolute path in manifest
+      manifest.source_path = path.resolve(localPath);
+
+      // Get file size for metadata
+      const stats = await fs.stat(manifest.source_path);
+      manifest.size_bytes = stats.size;
+    }
+
     // Validate payload
     if (payload) {
       // Check size limit
       const size = Buffer.isBuffer(payload) ? payload.length : Buffer.byteLength(payload);
+
+      // Enforce 10KB limit for inline content (small data)
+      const inlineLimit = 10 * 1024; // 10KB
+      if (size > inlineLimit) {
+        throw new ValidationError(
+          `Content size (${(size / 1024).toFixed(1)}KB) exceeds 10KB limit for inline storage. Use 'local_path' parameter instead of 'content' for larger files.`,
+          'CONTENT_TOO_LARGE',
+          { size, limit: inlineLimit, suggestion: 'Use local_path parameter for files >10KB' }
+        );
+      }
+
       const config = await this.getSystemConfig();
-      // Default to 1MB if not configured, allow env override
+      // Also check against configured max (defaults to 500KB)
       const maxSize = config?.max_resource_size_bytes ||
-        parseInt(process.env.BRAINSTORM_MAX_PAYLOAD_SIZE || '1048576', 10);
+        parseInt(process.env.BRAINSTORM_MAX_PAYLOAD_SIZE || '512000', 10);
       if (size > maxSize) {
         throw new ValidationError(
-          `Resource exceeds maximum size of ${maxSize} bytes (${(maxSize / 1024).toFixed(0)}KB). Consider using file references for large datasets.`,
+          `Resource exceeds maximum size of ${maxSize} bytes (${(maxSize / 1024).toFixed(0)}KB). Use 'local_path' parameter instead.`,
           'RESOURCE_TOO_LARGE',
           { size, limit: maxSize }
         );
       }
       manifest.size_bytes = size;
-
-      // Log warnings for files >100KB (approaching context limits)
-      if (size > 100 * 1024) {
-        console.log(`[Brainstorm] Warning: Storing large payload (${(size / 1024).toFixed(0)}KB) for resource ${manifest.resource_id}. Consider file references for better performance.`);
-      }
 
       // Validate JSON structure if string payload looks like JSON
       if (typeof payload === 'string') {

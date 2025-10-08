@@ -27,8 +27,8 @@ npm test
 # Run with custom storage path
 BRAINSTORM_STORAGE=/path/to/storage npm start
 
-# Run with custom payload size limit (default: 1MB)
-BRAINSTORM_MAX_PAYLOAD_SIZE=2097152 npm start  # 2MB
+# Run with custom payload size limit (default: 500KB)
+BRAINSTORM_MAX_PAYLOAD_SIZE=1048576 npm start  # 1MB
 
 # Auto-configure in Claude Code (builds + updates ~/.claude/mcp_config.json)
 npm run config
@@ -151,8 +151,13 @@ All user-controlled identifiers are validated to prevent security vulnerabilitie
 - **Payload Validation**: JSON bombs are prevented
   - Maximum 100 levels of JSON nesting
   - Plain text payloads pass through unchanged
-  - Size limit: 1MB (configurable via BRAINSTORM_MAX_PAYLOAD_SIZE)
-  - Warning logged for payloads >100KB (approaching context limits)
+  - Inline content limit: 10KB (use local_path for larger files)
+  - Maximum file size via local_path: 500KB (configurable via BRAINSTORM_MAX_PAYLOAD_SIZE)
+
+- **File Reference Support** (v0.4.0): Store large files efficiently
+  - `store_resource` accepts `content` (inline <10KB) or `local_path` (file reference >10KB)
+  - Path validation: Must be within home directory, no traversal attacks
+  - Agents read referenced files directly from filesystem
 
 - **Race Condition Prevention**: Atomic file system operations
   - `fs.mkdir(path, { recursive: false })` for check-and-create atomicity
