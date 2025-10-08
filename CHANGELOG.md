@@ -5,6 +5,26 @@ All notable changes to Brainstorm MCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2025-10-08
+
+### Added
+- **Local file reference support** for large files (>10KB)
+  - Added `local_path` parameter to `store_resource` tool for file references
+  - Inline content limited to 10KB, file references support up to 500KB (configurable)
+  - Path validation ensures files are within home directory and readable
+  - Mutual exclusion: cannot specify both `content` and `local_path`
+  - Helpful error messages guide agents to use correct parameter
+- **Message flow management** with `response_expected` parameter
+  - Agents must explicitly set `response_expected: boolean` when sending messages
+  - If true, sender must immediately call `receive_messages(wait=true)`
+  - If false, fire-and-forget message with no response expected
+  - Prevents bugs where agents send requests but don't listen for responses
+
+### Changed
+- Reduced maximum payload size from 10MB to 500KB (configurable via `BRAINSTORM_MAX_PAYLOAD_SIZE`)
+- Inline content in `store_resource` limited to 10KB
+- Updated tool descriptions with usage guidance for new parameters
+
 ## [0.3.0] - 2025-10-08
 
 ### Added
