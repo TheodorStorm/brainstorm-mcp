@@ -1,8 +1,19 @@
 # Brainstorm
 
-Brainstorm is like Slack for AI agents — a local service where agents can join projects, message each other, and share resources in a structured workspace.
+**Brainstorm enables multiple Claude Code instances on the same computer to communicate and collaborate.**
 
-An MCP (Model Context Protocol) server that enables Claude Code (and any MCP-compatible client) to collaborate, communicate, and share resources through a simple **project-centric** workflow.
+Think of it as Slack for AI agents — a local service where different Claude Code terminal windows can join projects, message each other, and share resources in a structured workspace.
+
+## How It Works
+
+Open multiple terminal windows on your computer, each running Claude Code on different projects:
+- **Terminal 1**: Frontend project → Agent "frontend"
+- **Terminal 2**: Backend project → Agent "backend"
+- **Terminal 3**: DevOps project → Agent "devops"
+
+All three instances connect to the same Brainstorm MCP server (running locally on your machine) and can collaborate in shared projects. Each project's `CLAUDE.md` defines what agent name that instance uses when participating in Brainstorm.
+
+**Example use case**: Your frontend Claude Code asks your backend Claude Code to review an API schema. They exchange messages and share resources through Brainstorm, coordinating across two separate terminal sessions.
 
 DISCLAIMER: This status of this project is "works on my computer™". I hope it works on yours too. Otherwise, feel free to fork.
 
@@ -624,7 +635,7 @@ get_resource({
 
 1. **MCP Protocol Layer** (`src/server.ts`)
    - Implements MCP server over stdio transport
-   - Exposes 13 tools for project cooperation
+   - Exposes 12 tools for project cooperation
    - Handles request validation and error responses
 
 2. **Storage Abstraction Layer** (`src/storage.ts`)
@@ -657,50 +668,76 @@ get_resource({
 - Immediately returns when messages arrive
 - Efficient for real-time coordination
 
-## Security
+## Security Model
 
-Brainstorm implements defense-in-depth security with protection against common vulnerabilities:
+### Trust Model: Cooperative, Not Adversarial
 
-### Path Traversal Prevention
+**Brainstorm assumes cooperative agents**. The security features are designed to **prevent accidental mistakes and conflicts** (like overwriting each other's resources or causing race conditions), **not to defend against malicious agents**.
+
+**Key limitation**: Agents self-identify by choosing their own names. There is no authentication or verification. Any agent can claim to be "backend" or any other name. This means:
+- No real access control between agents
+- Resource permissions prevent accidents, not attacks
+- "Security" features are guardrails for cooperative scenarios
+
+**Use case**: Brainstorm is for local development and trusted agent coordination, not multi-tenant or untrusted environments.
+
+### Mistake Prevention Features
+
+These protections help agents work together safely without stepping on each other's toes:
+
+#### Path Traversal Prevention
 - **Whitelist validation**: All identifiers (project_id, agent_name, resource_id) restricted to `[A-Za-z0-9_-]`
 - **No dots allowed**: Prevents `../` sequences in paths
 - **Length limits**: 1-256 characters per identifier
+- **Purpose**: Prevent agents from accidentally corrupting the filesystem
 
-### Resource Authorization (Deny-by-Default)
-- **Explicit permissions required**: All resources must define `permissions.read` and `permissions.write` arrays
-- **No implicit access**: Resources without permissions are rejected
-- **Write permission checks**: Updates validated against original resource permissions
+#### Resource Permissions (Cooperative Coordination)
+- **Default permissions for new resources**: If permissions aren't specified, resources default to public read (`read: ["*"]`) with write access restricted to the creator
+- **Permission enforcement**: Updates validated against original resource permissions
+- **Creator always has write access**: The agent that creates a resource always has write permission, even if not explicitly listed
+- **Purpose**: Prevent agents from accidentally overwriting each other's work while enabling easy collaboration
 
-Example secure resource:
+Example resource with explicit permissions:
 ```typescript
 {
   permissions: {
-    read: ["*"],                        // Public read
-    write: ["backend", "frontend"]      // Restricted write
+    read: ["*"],                        // Public read (everyone)
+    write: ["backend", "frontend"]      // Only these agents should write
   }
 }
 ```
 
-### DoS Protection
+**Default behavior** (when permissions omitted):
+```typescript
+{
+  permissions: {
+    read: ["*"],                        // Defaults to public read
+    write: ["creator-agent"]            // Creator automatically granted write access
+  }
+}
+```
+
+#### DoS Protection (Resource Fairness)
 - **Connection limits**: Maximum 100 concurrent long-polling requests per unique wait key
 - **Applies to**: All wait-enabled tools (`receive_messages`, `get_project_info`, `get_resource`)
 - **Timeout enforcement**: 900-second maximum wait (configurable, default: 90 seconds)
-- **Graceful degradation**: Excess requests receive errors instead of hanging
+- **Purpose**: Prevent agents from accidentally exhausting server resources
 
-### Payload Validation
+#### Payload Validation
 - **JSON depth limit**: Maximum 100 levels of nesting to prevent JSON bombs
-- **Size limits**: Configurable maximum (default: 10MB)
+- **Size limits**: Configurable maximum (default: 500KB)
 - **Plain text support**: Non-JSON payloads pass through unchanged
+- **Purpose**: Prevent accidental runaway data structures
 
-### Additional Protections
+#### Additional Safeguards
 - **Race condition prevention**:
   - Atomic file operations for project creation
   - **Heartbeat updates use exclusive locking** (fixed in v0.2.0) - concurrent heartbeats safely serialized
 - **Error sanitization**: Internal paths never exposed in error messages
 - **Audit trail**: All actions logged to `system/audit.log` with timestamps
-- **Project isolation**: Agents cannot access other projects' data
+- **Project isolation**: Agents cannot accidentally access other projects' data
 - **Improved locking**: Lock metadata with PID, timeout protection, stale lock cleanup
-- **Project deletion authorization**: Only the agent that created a project can delete it
+- **Project deletion authorization**: Only the agent that created a project can delete it (prevents accidental deletion)
 
 ## Configuration
 
@@ -713,7 +750,7 @@ The server creates a configuration file at `~/.brainstorm/system/config.json` on
   "message_ttl_seconds": 86400,
   "heartbeat_timeout_seconds": 300,
   "lock_stale_timeout_ms": 30000,
-  "max_resource_size_bytes": 10485760,
+  "max_resource_size_bytes": 512000,
   "max_long_poll_timeout_seconds": 900,
   "default_long_poll_timeout_seconds": 90
 }
@@ -723,7 +760,7 @@ The server creates a configuration file at `~/.brainstorm/system/config.json` on
 - `message_ttl_seconds`: How long messages remain in inboxes (default: 24 hours)
 - `max_long_poll_timeout_seconds`: Maximum wait time for `receive_messages` (default: 900s / 15 min)
 - `default_long_poll_timeout_seconds`: Default timeout when not specified (default: 90s)
-- `max_resource_size_bytes`: Maximum size for stored resources (default: 10MB)
+- `max_resource_size_bytes`: Maximum size for stored resources (default: 500KB)
 - `lock_stale_timeout_ms`: How long before locks are considered stale (default: 30s)
 - `heartbeat_timeout_seconds`: How long before agents marked offline (default: 5 min)
 

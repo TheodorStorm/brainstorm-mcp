@@ -10,6 +10,9 @@ import {
   Tool
 } from '@modelcontextprotocol/sdk/types.js';
 import { randomUUID } from 'crypto';
+import { readFileSync, existsSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { FileSystemStorage } from './storage.js';
 import { isUserError } from './errors.js';
 import type {
@@ -18,6 +21,48 @@ import type {
   Message,
   ResourceManifest
 } from './types.js';
+
+// Load version info with fallback to package.json
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+function loadVersionInfo(): { version: string; name: string; description?: string } {
+  // Try to load from generated version.json (exists after build)
+  const versionPaths = [
+    join(__dirname, 'version.json'),
+    join(__dirname, '..', 'version.json')
+  ];
+
+  for (const candidate of versionPaths) {
+    if (existsSync(candidate)) {
+      try {
+        return JSON.parse(readFileSync(candidate, 'utf-8'));
+      } catch (err) {
+        // Continue to next candidate or fallback
+      }
+    }
+  }
+
+  // Fallback to package.json (always exists)
+  const pkgPath = join(__dirname, '..', '..', 'package.json');
+  try {
+    const packageJson = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+    return {
+      version: packageJson.version,
+      name: packageJson.name,
+      description: packageJson.description
+    };
+  } catch (err) {
+    // Last resort: return hardcoded values
+    return {
+      version: '0.6.0',
+      name: 'brainstorm',
+      description: 'MCP server enabling multi-agent collaboration and coordination'
+    };
+  }
+}
+
+const versionInfo = loadVersionInfo();
 
 export class AgentCoopServer {
   private server: Server;
@@ -30,8 +75,8 @@ export class AgentCoopServer {
 
     this.server = new Server(
       {
-        name: 'brainstorm',
-        version: '0.4.0'
+        name: versionInfo.name,
+        version: versionInfo.version
       },
       {
         capabilities: {
@@ -266,7 +311,7 @@ export class AgentCoopServer {
         },
         {
           name: 'store_resource',
-          description: 'Store a shared resource or document in the project. **Local storage only - no network transfer costs.** Use "content" for small data (<10KB) or "local_path" for file references (>10KB). Maximum inline content: 10KB. Maximum file size via local_path: 500KB (configurable via BRAINSTORM_MAX_PAYLOAD_SIZE). **For updates:** include the etag you received when you read the resource (pass it back unchanged) to prevent conflicts.',
+          description: 'Store a shared resource or document in the project. Use "content" for small data (<50KB) or "source_path" for file references (>50KB). Maximum inline content: 50KB. Maximum file size via source_path: 500KB (configurable via BRAINSTORM_MAX_PAYLOAD_SIZE). **FILE REFERENCES**: When you use source_path, that file path is stored in the manifest - other agents must read that source_path to get the content. **For updates:** include the etag you received when you read the resource (pass it back unchanged) to prevent conflicts. Updating the resource increments the etag, signaling to other agents that they must re-read the source_path file.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -292,11 +337,11 @@ export class AgentCoopServer {
               },
               content: {
                 type: 'string',
-                description: 'Inline resource content (<10KB). Use local_path for larger files.'
+                description: 'Inline resource content (<50KB). Use source_path for larger files.'
               },
-              local_path: {
+              source_path: {
                 type: 'string',
-                description: 'Absolute path to file for large data (>10KB). File must be within home directory and readable.'
+                description: 'Absolute path to file for large data (>50KB). File must be within home directory and readable. This path will be stored in the manifest for other agents to read.'
               },
               mime_type: {
                 type: 'string',
@@ -327,7 +372,7 @@ export class AgentCoopServer {
         },
         {
           name: 'get_resource',
-          description: 'Retrieve a shared resource from the project. Supports waiting for resource creation.',
+          description: 'Retrieve a shared resource from the project. **CRITICAL FILE REFERENCE WORKFLOW**: If the manifest contains `source_path`, the actual content is stored in that file. You MUST use the Read tool on `source_path` to get the content - the `content` field will be undefined. **When checking for updates**: If the manifest `etag` has changed since your last read, you MUST re-read the file at `source_path` because the file content has also changed. Never assume cached file content is still valid after the manifest etag changes. Supports waiting for resource creation.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -413,6 +458,28 @@ export class AgentCoopServer {
               }
             },
             required: ['project_id', 'agent_name']
+          }
+        },
+        {
+          name: 'version',
+          description: 'Get the current Brainstorm server version',
+          inputSchema: {
+            type: 'object',
+            properties: {}
+          }
+        },
+        {
+          name: 'status',
+          description: 'Get agent status across all projects. Shows which projects the agent is a member of and whether there are unread messages in each project.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              agent_name: {
+                type: 'string',
+                description: 'Agent name to check status for'
+              }
+            },
+            required: ['agent_name']
           }
         }
       ];
@@ -820,9 +887,9 @@ export class AgentCoopServer {
             };
 
             const content = args.content as string | undefined;
-            const localPath = args.local_path as string | undefined;
+            const sourcePath = args.source_path as string | undefined;
 
-            await this.storage.storeResource(manifest, agentName, content, localPath);
+            await this.storage.storeResource(manifest, agentName, content, sourcePath);
 
             await this.storage.auditLog({
               timestamp: new Date().toISOString(),
@@ -831,7 +898,7 @@ export class AgentCoopServer {
               target: manifest.resource_id,
               details: {
                 project_id: manifest.project_id,
-                storage_type: localPath ? 'file_reference' : 'inline'
+                storage_type: sourcePath ? 'file_reference' : 'inline'
               }
             });
 
@@ -841,7 +908,7 @@ export class AgentCoopServer {
                 text: JSON.stringify({
                   success: true,
                   resource_id: manifest.resource_id,
-                  storage_type: localPath ? 'file_reference' : 'inline'
+                  storage_type: sourcePath ? 'file_reference' : 'inline'
                 }, null, 2)
               }]
             };
@@ -1031,6 +1098,56 @@ export class AgentCoopServer {
                 text: JSON.stringify({
                   success: true,
                   message: 'Project deleted successfully'
+                }, null, 2)
+              }]
+            };
+          }
+
+          case 'version': {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify(versionInfo, null, 2)
+              }]
+            };
+          }
+
+          case 'status': {
+            const agentName = args.agent_name as string;
+
+            // Get all projects
+            const allProjects = await this.storage.listProjects();
+            const projectStatuses = [];
+
+            // Check each project for membership and messages
+            for (const project of allProjects) {
+              const member = await this.storage.getProjectMember(project.project_id, agentName);
+
+              if (member) {
+                // Agent is a member of this project
+                const messages = await this.storage.getAgentInbox(project.project_id, agentName);
+
+                projectStatuses.push({
+                  project_id: project.project_id,
+                  project_name: project.name,
+                  description: project.description,
+                  joined_at: member.joined_at,
+                  last_seen: member.last_seen,
+                  online: member.online,
+                  unread_messages: messages.length,
+                  has_unread: messages.length > 0
+                });
+              }
+            }
+
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  agent_name: agentName,
+                  projects: projectStatuses,
+                  total_projects: projectStatuses.length,
+                  total_unread_messages: projectStatuses.reduce((sum, p) => sum + p.unread_messages, 0)
                 }, null, 2)
               }]
             };

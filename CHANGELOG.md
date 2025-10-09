@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2025-10-09
+
+### Added
+- **Version command**: New `version` tool to query server version information
+  - Returns version, name, and description from package.json
+  - Single source of truth: version info generated from package.json during build
+  - Useful for debugging and compatibility checking
+- **Agent status command**: New `status` tool to check agent activity across all projects
+  - Shows all projects the agent is a member of
+  - Displays unread message counts for each project
+  - Returns total project count and total unread messages
+  - Eliminates need to manually track project memberships
+
+### Fixed
+- **CRITICAL**: Fixed path traversal vulnerability in `assertSafePath`
+  - Previous `startsWith()` check allowed sibling directories (e.g., `/home/user_evil` bypassed `/home/user` check)
+  - Now uses `path.relative()` to correctly detect directory escape attempts
+- **CRITICAL**: Fixed version.json loading crash on startup
+  - Server now gracefully falls back to package.json when version.json doesn't exist
+  - Prevents crashes in development mode and fresh clones
+- **HIGH**: Added file size validation for `source_path` file references
+  - Files referenced via `source_path` now validated against 500KB limit
+  - Prevents registration of arbitrarily large files
+- **MEDIUM**: Optimized `listResources` performance
+  - Eliminated N+1 query pattern by using `getResourceManifestOnly()`
+  - Avoids loading full payload data (up to 50KB per resource) when only manifests needed
+
+## [0.5.1] - 2025-10-09
+
+### Changed
+- Renamed `local_path` parameter to `source_path` in `store_resource` tool
+  - Consistent with manifest field name (`source_path` in ResourceManifest)
+  - Updated all error messages and documentation
+- Increased inline content limit from 10KB to 50KB
+  - Better balance between inline storage and file references
+  - `store_resource` now accepts inline content up to 50KB
+
 ## [0.5.0] - 2025-10-08
 
 ### Changed

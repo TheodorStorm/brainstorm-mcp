@@ -4,7 +4,39 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Brainstorm** is an MCP (Model Context Protocol) server that enables multi-agent collaboration. Claude Code agents can discover each other, exchange messages, and share resources through a project-centric workflow.
+**Brainstorm** is an MCP (Model Context Protocol) server that enables **multiple Claude Code instances on the same computer to communicate and collaborate**.
+
+### How It Works
+
+Each Claude Code instance (different terminal windows, different projects) can:
+- Connect to the shared Brainstorm MCP server
+- Join projects with a unique agent name
+- Discover other Claude Code instances in the same project
+- Exchange messages and share resources
+
+**Example**: You have three terminal windows open on your computer:
+- Window 1: Claude Code working on a frontend project (agent name: "frontend")
+- Window 2: Claude Code working on a backend project (agent name: "backend")
+- Window 3: Claude Code working on DevOps (agent name: "devops")
+
+All three instances connect to the same Brainstorm server (running on your machine) and can collaborate in shared projects.
+
+### Agent Identity
+
+**IMPORTANT**: Each project's `CLAUDE.md` file should define what agent name that Claude Code instance uses when participating in Brainstorm projects. This allows different projects on your computer to have different identities when collaborating.
+
+Example section to add to your project's CLAUDE.md:
+```markdown
+## Brainstorm Agent Name
+
+When participating in Brainstorm projects, this Claude Code instance identifies as: **frontend-agent**
+
+Use this name for all Brainstorm operations:
+- `join_project` with agent_name: "frontend-agent"
+- `send_message` with from_agent: "frontend-agent"
+- `receive_messages` with agent_name: "frontend-agent"
+- `status` with agent_name: "frontend-agent"
+```
 
 ## Development Commands
 
@@ -45,7 +77,7 @@ Default storage location: `~/.brainstorm`
 
 1. **MCP Protocol Layer** (`src/server.ts`)
    - `AgentCoopServer` class implements the MCP server
-   - Exposes 13 tools for agent cooperation (create_project, delete_project, join_project, send_message, store_resource, etc.)
+   - Exposes 14 tools for agent cooperation (create_project, delete_project, join_project, send_message, receive_messages, acknowledge_message, store_resource, get_resource, list_resources, get_project_info, list_projects, heartbeat, version, status)
    - Uses stdio transport for communication with MCP clients
    - All tool handlers map to storage layer operations
 
@@ -130,6 +162,22 @@ Default storage location: `~/.brainstorm`
 
 The configuration script (`scripts/configure-mcp.js`) handles building the project and updating the config file with the correct absolute path.
 
+## Version Management
+
+Version information is stored in a single source of truth: `package.json`
+
+**Build Process**:
+- During `npm run build`, `scripts/generate-version.js` extracts version info from `package.json`
+- Generates `dist/src/version.json` with version, name, and description
+- Server imports this file at runtime to ensure consistency
+
+**Query Version**: Use the `version` tool to retrieve current server version information.
+
+**Updating Version**:
+1. Update version in `package.json`
+2. Run `npm run build` to regenerate `version.json`
+3. Version is automatically included in server responses and audit logs
+
 ## Security (v0.4.0)
 
 All user-controlled identifiers are validated to prevent security vulnerabilities:
@@ -151,11 +199,11 @@ All user-controlled identifiers are validated to prevent security vulnerabilitie
 - **Payload Validation**: JSON bombs are prevented
   - Maximum 100 levels of JSON nesting
   - Plain text payloads pass through unchanged
-  - Inline content limit: 10KB (use local_path for larger files)
-  - Maximum file size via local_path: 500KB (configurable via BRAINSTORM_MAX_PAYLOAD_SIZE)
+  - Inline content limit: 50KB (use source_path for larger files)
+  - Maximum file size via source_path: 500KB (configurable via BRAINSTORM_MAX_PAYLOAD_SIZE)
 
 - **File Reference Support** (v0.4.0): Store large files efficiently
-  - `store_resource` accepts `content` (inline <10KB) or `local_path` (file reference >10KB)
+  - `store_resource` accepts `content` (inline <50KB) or `source_path` (file reference >50KB)
   - Path validation: Must be within home directory, no traversal attacks
   - Agents read referenced files directly from filesystem
 
@@ -167,8 +215,6 @@ All user-controlled identifiers are validated to prevent security vulnerabilitie
   - Only the agent that created a project can delete it via `delete_project` tool
   - Projects without a creator cannot be deleted (safety measure)
   - Admin bypass available via `npm run cleanup` for testing/recovery
-
-See `SECURITY.md` for complete security documentation.
 
 ## Testing
 

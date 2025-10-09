@@ -97,7 +97,9 @@ export class FileSystemStorage {
 
     // Ensure within home directory
     const homedir = os.homedir();
-    if (!resolvedPath.startsWith(homedir)) {
+    const relative = path.relative(homedir, resolvedPath);
+    // Check if path escapes home directory (starts with ..) or is absolute (different root)
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
       throw new ValidationError(
         `Invalid ${context}: path must be within home directory`,
         'PATH_OUTSIDE_HOME',
@@ -713,12 +715,12 @@ export class FileSystemStorage {
       );
     }
 
-    // Mutual exclusion: cannot specify both content and local_path
+    // Mutual exclusion: cannot specify both content and source_path
     if (payload && localPath) {
       throw new ValidationError(
-        'Cannot specify both content and local_path. Use content for small data (<100KB) or local_path for file references.',
+        'Cannot specify both content and source_path. Use content for small data (<50KB) or source_path for file references.',
         'CONFLICTING_PARAMETERS',
-        { has_content: true, has_local_path: true }
+        { has_content: true, has_source_path: true }
       );
     }
 
@@ -801,7 +803,7 @@ export class FileSystemStorage {
       }
 
       // Preserve storage-managed metadata fields when not being updated
-      // These fields are set by storage layer based on content/local_path operations
+      // These fields are set by storage layer based on content/source_path operations
       if (!payload && !localPath) {
         // No content update - preserve all storage-managed fields
         storedManifest.source_path = existing.source_path;
@@ -859,9 +861,9 @@ export class FileSystemStorage {
       }
     }
 
-    // Handle local_path (file reference)
+    // Handle source_path (file reference)
     if (localPath) {
-      await this.assertSafePath(localPath, 'local_path');
+      await this.assertSafePath(localPath, 'source_path');
 
       // Store the absolute path in manifest
       storedManifest.source_path = path.resolve(localPath);
@@ -869,6 +871,18 @@ export class FileSystemStorage {
       // Get file size for metadata
       const stats = await fs.stat(storedManifest.source_path);
       storedManifest.size_bytes = stats.size;
+
+      // Validate file size against max (Fix 2: HIGH priority)
+      const config = await this.getSystemConfig();
+      const maxSize = config?.max_resource_size_bytes ||
+        parseInt(process.env.BRAINSTORM_MAX_PAYLOAD_SIZE || '512000', 10);
+      if (storedManifest.size_bytes > maxSize) {
+        throw new ValidationError(
+          `File size (${(storedManifest.size_bytes / 1024).toFixed(0)}KB) exceeds maximum of ${(maxSize / 1024).toFixed(0)}KB`,
+          'FILE_TOO_LARGE',
+          { size: storedManifest.size_bytes, limit: maxSize }
+        );
+      }
     }
 
     // Validate payload
@@ -876,13 +890,13 @@ export class FileSystemStorage {
       // Check size limit
       const size = Buffer.isBuffer(payload) ? payload.length : Buffer.byteLength(payload);
 
-      // Enforce 10KB limit for inline content (small data)
-      const inlineLimit = 10 * 1024; // 10KB
+      // Enforce 50KB limit for inline content (small data)
+      const inlineLimit = 50 * 1024; // 50KB
       if (size > inlineLimit) {
         throw new ValidationError(
-          `Content size (${(size / 1024).toFixed(1)}KB) exceeds 10KB limit for inline storage. Use 'local_path' parameter instead of 'content' for larger files.`,
+          `Content size (${(size / 1024).toFixed(1)}KB) exceeds 50KB limit for inline storage. Use 'source_path' parameter instead of 'content' for larger files.`,
           'CONTENT_TOO_LARGE',
-          { size, limit: inlineLimit, suggestion: 'Use local_path parameter for files >10KB' }
+          { size, limit: inlineLimit, suggestion: 'Use source_path parameter for files >50KB' }
         );
       }
 
@@ -892,7 +906,7 @@ export class FileSystemStorage {
         parseInt(process.env.BRAINSTORM_MAX_PAYLOAD_SIZE || '512000', 10);
       if (size > maxSize) {
         throw new ValidationError(
-          `Resource exceeds maximum size of ${maxSize} bytes (${(maxSize / 1024).toFixed(0)}KB). Use 'local_path' parameter instead.`,
+          `Resource exceeds maximum size of ${maxSize} bytes (${(maxSize / 1024).toFixed(0)}KB). Use 'source_path' parameter instead.`,
           'RESOURCE_TOO_LARGE',
           { size, limit: maxSize }
         );
@@ -1055,12 +1069,29 @@ export class FileSystemStorage {
       for (const entry of entries) {
         if (entry.isDirectory()) {
           try {
-            const result = await this.getResource(projectId, entry.name, agentName);
-            if (result) {
-              resources.push(result.manifest);
+            // Optimize: use getResourceManifestOnly instead of getResource to avoid loading payloads (Fix 3: MEDIUM priority)
+            const storedManifest = await this.getResourceManifestOnly(projectId, entry.name);
+            if (!storedManifest) continue;
+
+            // Check read permissions - default deny
+            const permissions = storedManifest.permissions;
+            if (!permissions || !permissions.read) {
+              continue; // Skip resources without read permissions
             }
+
+            const hasAccess =
+              permissions.read.includes('*') ||
+              permissions.read.includes(agentName);
+
+            if (!hasAccess) {
+              continue; // Skip resources the agent doesn't have access to
+            }
+
+            // Strip creator_agent before returning to agents (security: prevent identity spoofing)
+            const { creator_agent, ...manifest } = storedManifest;
+            resources.push(manifest);
           } catch (err) {
-            // Skip resources the agent doesn't have access to
+            // Skip resources that can't be read
             if (err instanceof PermissionError) continue;
             throw err; // Re-throw other errors
           }
