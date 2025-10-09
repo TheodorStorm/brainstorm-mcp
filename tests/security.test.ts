@@ -789,6 +789,96 @@ describe('Concurrency: Heartbeat Race Condition Prevention', () => {
     await fs.rm(testRoot, { recursive: true, force: true });
   });
 
+  it('should auto-grant write permission to backfilled creator on legacy resources', async () => {
+    const testRoot = path.join(tmpdir(), `brainstorm-test-${Date.now()}`);
+    const storage = new FileSystemStorage(testRoot);
+    await storage.initialize();
+
+    // Setup
+    const project: ProjectMetadata = {
+      project_id: 'test-project',
+      name: 'Test',
+      created_at: new Date().toISOString(),
+      schema_version: '1.0'
+    };
+    await storage.createProject(project);
+
+    const member: ProjectMember = {
+      project_id: 'test-project',
+      agent_name: 'agent-a',
+      agent_id: 'id-a',
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+      online: true
+    };
+    await storage.joinProject(member);
+
+    // Create legacy resource by manually writing file without creator_agent and EMPTY write permissions
+    const resourceDir = path.join(testRoot, 'projects', 'test-project', 'resources', 'legacy-empty-write');
+    await fs.mkdir(resourceDir, { recursive: true });
+
+    const legacyManifest = {
+      resource_id: 'legacy-empty-write',
+      project_id: 'test-project',
+      name: 'Legacy Resource with Empty Write',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      etag: 'legacy-etag-1',
+      permissions: {
+        read: ['*'],
+        write: [] // Empty write permissions - this is the key test case!
+      }
+      // Note: no creator_agent field
+    };
+    await fs.writeFile(
+      path.join(resourceDir, 'manifest.json'),
+      JSON.stringify(legacyManifest, null, 2)
+    );
+
+    // Create payload directory and data file
+    const payloadDir = path.join(resourceDir, 'payload');
+    await fs.mkdir(payloadDir, { recursive: true });
+    await fs.writeFile(
+      path.join(payloadDir, 'data'),
+      'test content'
+    );
+
+    // Read legacy resource
+    const readResult = await storage.getResource('test-project', 'legacy-empty-write', 'agent-a');
+    assert.ok(readResult, 'Legacy resource should exist');
+    const { manifest: read } = readResult;
+
+    // Try to update the resource as agent-a (who should become the creator)
+    const updateManifest: ResourceManifest = {
+      ...read,
+      description: 'Updated by backfilled creator'
+    };
+
+    // Should NOT throw - agent-a should be auto-granted write permission as backfilled creator
+    await assert.doesNotReject(
+      () => storage.storeResource(updateManifest, 'agent-a'),
+      'Backfilled creator should be auto-granted write permission'
+    );
+
+    // Verify update succeeded and creator now has write access
+    const updatedResult = await storage.getResource('test-project', 'legacy-empty-write', 'agent-a');
+    assert.ok(updatedResult, 'Updated legacy resource should exist');
+    const { manifest: updated } = updatedResult;
+
+    // Verify agent-a was added to write permissions
+    assert.ok(
+      updated.permissions?.write.includes('agent-a'),
+      'Backfilled creator should be in write permissions'
+    );
+    assert.strictEqual(
+      updated.description,
+      'Updated by backfilled creator',
+      'Resource should be updated'
+    );
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+  });
+
   it('should handle legacy resources without creator_agent', async () => {
     const testRoot = path.join(tmpdir(), `brainstorm-test-${Date.now()}`);
     const storage = new FileSystemStorage(testRoot);

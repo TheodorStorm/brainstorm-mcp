@@ -755,7 +755,25 @@ export class FileSystemStorage {
     };
 
     if (existing) {
-      const permissions = existing.permissions;
+      // Backfill creator_agent EARLY for legacy resources (before permission checks)
+      storedManifest.creator_agent = existing.creator_agent || operatingAgent;
+      storedManifest.created_at = existing.created_at; // Creation time never changes
+
+      // Get permissions and ensure creator has write access
+      let permissions = existing.permissions;
+
+      // Auto-grant write permission to backfilled creator for legacy resources
+      if (storedManifest.creator_agent === operatingAgent && permissions?.write) {
+        if (!permissions.write.includes('*') && !permissions.write.includes(operatingAgent)) {
+          // Clone permissions to avoid mutating the existing object
+          permissions = {
+            ...permissions,
+            write: [...permissions.write, operatingAgent]
+          };
+        }
+      }
+
+      // NOW check permissions (after auto-granting creator write access)
       if (!permissions || !permissions.write) {
         throw new PermissionError(
           'Access denied: no write permissions defined',
@@ -782,11 +800,6 @@ export class FileSystemStorage {
         );
       }
 
-      // Preserve immutable fields on updates
-      // Handle legacy resources: backfill creator_agent if missing
-      storedManifest.creator_agent = existing.creator_agent || operatingAgent; // Creator never changes (or set on first update if missing)
-      storedManifest.created_at = existing.created_at; // Creation time never changes
-
       // Preserve storage-managed metadata fields when not being updated
       // These fields are set by storage layer based on content/local_path operations
       if (!payload && !localPath) {
@@ -796,16 +809,23 @@ export class FileSystemStorage {
         storedManifest.mime_type = existing.mime_type || storedManifest.mime_type;
       }
 
-      // Allow creator to update permissions, otherwise preserve existing
-      // Use the backfilled creator_agent (handles legacy resources)
+      // Allow creator to update permissions, otherwise preserve existing (with auto-granted creator write)
       if (storedManifest.creator_agent === operatingAgent) {
-        // Creator can update permissions if provided
+        // Creator can update permissions if provided in the manifest
+        // Otherwise, use permissions variable (which includes auto-granted write)
         if (!storedManifest.permissions) {
-          storedManifest.permissions = existing.permissions;
+          storedManifest.permissions = permissions;
+        }
+        // If creator provided permissions, we still need to merge in auto-granted write
+        // This ensures creator always has write access even when updating permissions
+        else if (storedManifest.permissions.write &&
+                 !storedManifest.permissions.write.includes('*') &&
+                 !storedManifest.permissions.write.includes(operatingAgent)) {
+          storedManifest.permissions.write.push(operatingAgent);
         }
       } else {
-        // Non-creator cannot change permissions
-        storedManifest.permissions = existing.permissions;
+        // Non-creator cannot change permissions - use permissions (with auto-granted creator write)
+        storedManifest.permissions = permissions;
       }
 
       // Update timestamp and etag for modification
@@ -821,6 +841,22 @@ export class FileSystemStorage {
         .update(`${Date.now()}-${randomUUID()}`)
         .digest('hex')
         .substring(0, 16);
+
+      // Ensure creator always has write permission
+      // Default to public read ('*') for easy collaboration while keeping write restricted to creator
+      // This allows resources to be shared by default without requiring explicit read permissions
+      if (!storedManifest.permissions) {
+        storedManifest.permissions = { read: ['*'], write: [] };
+      }
+      if (!storedManifest.permissions.read) {
+        storedManifest.permissions.read = ['*'];
+      }
+      if (!storedManifest.permissions.write) {
+        storedManifest.permissions.write = [];
+      }
+      if (!storedManifest.permissions.write.includes(operatingAgent)) {
+        storedManifest.permissions.write.push(operatingAgent);
+      }
     }
 
     // Handle local_path (file reference)

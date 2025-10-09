@@ -119,6 +119,27 @@ All debate messages should follow this structure:
 
 ## Reaching Consensus
 
+### CRITICAL: Avoid Premature "Nobody Knows" Settlements
+
+**❌ DO NOT prematurely agree to:**
+- "We can't know for sure"
+- "Both sides have valid points, so it's unknowable"
+- "This is just a matter of perspective"
+- "Science hasn't settled this yet"
+
+**These are cop-outs!** Only accept uncertainty AFTER:
+1. ✅ **Exhausting all available evidence** - Search thoroughly for recent research
+2. ✅ **Defining terms precisely** - Ensure you're debating the same thing
+3. ✅ **Testing specific claims** - Break the topic into falsifiable sub-claims
+4. ✅ **Identifying what IS known** - State what evidence does support
+5. ✅ **At least 5+ rounds of rigorous exchange** - Don't settle early
+
+**If the topic is genuinely undecidable**, the consensus should be:
+- 🎯 **What evidence DOES exist** and what it suggests
+- 🎯 **What specific questions remain unanswered**
+- 🎯 **What would need to be true** for each position to be correct
+- 🎯 **The strongest arguments on each side**
+
 ### When to Signal Agreement
 
 **You should agree when:**
@@ -126,7 +147,7 @@ All debate messages should follow this structure:
 - ✅ Your position has been refined to match theirs
 - ✅ A nuanced middle ground emerges that's more accurate
 - ✅ The evidence clearly supports their position
-- ✅ Continued debate won't improve accuracy
+- ✅ Continued debate won't improve accuracy (AFTER exhausting evidence)
 
 ### Consensus Message Format
 
@@ -155,6 +176,9 @@ All debate messages should follow this structure:
 - ❌ **Gish gallop** - Overwhelming with quantity over quality
 - ❌ **Proof by verbosity** - Making arguments unnecessarily complex
 - ❌ **Winning over truth** - Caring more about "being right" than finding truth
+- ❌ **Premature agnosticism** - Settling for "nobody knows" before exhausting evidence
+- ❌ **False balance** - Treating unequal evidence as equally valid
+- ❌ **Lazy consensus** - Agreeing just to end the debate quickly
 
 ## Example: Good vs Bad Arguments
 

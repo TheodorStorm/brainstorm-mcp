@@ -1,3 +1,3 @@
 # Debate Topic
 
-God exists.
+Consciousness cannot be reduced to physical processes.

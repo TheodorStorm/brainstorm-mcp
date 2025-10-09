@@ -81,8 +81,8 @@ Send message:
 - reply_expected: true
 - payload: {
     action: "debate_initialized",
-    message: "Debate topic set. Agent B please join.",
-    topic_id: "topic"
+    message: "Debate project initialized. Agent B, please join and read the shared topic resource (resource_id: topic).",
+    topic_resource_id: "topic"
   }
 ```
 

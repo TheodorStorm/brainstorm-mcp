@@ -15,4 +15,4 @@ echo ""
 echo "Starting Claude Code..."
 echo ""
 
-claude "Read and follow the instructions in AGENT_B.md. You are Agent B, arguing AGAINST the statement in TOPIC.md. Use web search to find counter-evidence and debate until consensus is reached." --allowedTools "mcp__brainstorm,WebSearch"
+claude "Read and follow the instructions in AGENT_B.md. You are Agent B, arguing AGAINST the statement that Agent A will present. Use web search to find counter-evidence and debate until consensus is reached." --allowedTools "mcp__brainstorm,WebSearch"
