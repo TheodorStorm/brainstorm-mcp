@@ -62,6 +62,18 @@ export interface ProjectMetadata {
   /** Agent name that created this project (required for deletion authorization) */
   created_by?: string;
 
+  /** Whether this project is archived (inactive but recoverable) - v0.9.0+ */
+  archived?: boolean;
+
+  /** ISO 8601 timestamp when project was archived - v0.9.0+ */
+  archived_at?: string;
+
+  /** Agent name that archived this project - v0.9.0+ */
+  archived_by?: string;
+
+  /** Optional reason for archiving - v0.9.0+ */
+  archive_reason?: string;
+
   /** Schema version for forward compatibility */
   schema_version: string;
 }

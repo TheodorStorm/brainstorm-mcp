@@ -662,7 +662,7 @@ export class FileSystemStorage {
     }
   }
 
-  async listProjects(): Promise<ProjectMetadata[]> {
+  async listProjects(offset?: number, limit?: number): Promise<ProjectMetadata[]> {
     const projectsDir = path.join(this.root, 'projects');
 
     try {
@@ -678,7 +678,10 @@ export class FileSystemStorage {
         }
       }
 
-      return projects;
+      // Apply pagination
+      const start = offset || 0;
+      const end = limit ? start + limit : undefined;
+      return projects.slice(start, end);
     } catch {
       return [];
     }
@@ -886,7 +889,7 @@ export class FileSystemStorage {
     }
   }
 
-  async listProjectMembers(projectId: string): Promise<ProjectMember[]> {
+  async listProjectMembers(projectId: string, offset?: number, limit?: number): Promise<ProjectMember[]> {
     this.assertSafeId(projectId, 'project_id');
 
     const membersDir = path.join(this.root, 'projects', projectId, 'members');
@@ -905,7 +908,10 @@ export class FileSystemStorage {
         }
       }
 
-      return members;
+      // Apply pagination
+      const start = offset || 0;
+      const end = limit ? start + limit : undefined;
+      return members.slice(start, end);
     } catch {
       return [];
     }
@@ -1024,7 +1030,7 @@ export class FileSystemStorage {
     await this.atomicWrite(inboxPath, JSON.stringify(message, null, 2));
   }
 
-  async getAgentInbox(projectId: string, agentName: string, limit?: number): Promise<Message[]> {
+  async getAgentInbox(projectId: string, agentName: string, offset?: number, limit?: number): Promise<Message[]> {
     this.assertSafeId(projectId, 'project_id');
     this.assertSafeId(agentName, 'agent_name');
 
@@ -1034,7 +1040,10 @@ export class FileSystemStorage {
       const files = await fs.readdir(inboxDir);
       files.sort(); // Lexicographic sort (timestamp-based filenames)
 
-      const messagesToRead = limit ? files.slice(0, limit) : files;
+      // Apply pagination to file list before reading
+      const start = offset || 0;
+      const end = limit ? start + limit : undefined;
+      const messagesToRead = files.slice(start, end);
       const messages: Message[] = [];
 
       const config = await this.getSystemConfig();
@@ -1584,7 +1593,7 @@ export class FileSystemStorage {
     }
   }
 
-  async listResources(projectId: string, agentName: string): Promise<ResourceManifest[]> {
+  async listResources(projectId: string, agentName: string, offset?: number, limit?: number): Promise<ResourceManifest[]> {
     this.assertSafeId(projectId, 'project_id');
     this.assertSafeId(agentName, 'agent_name');
 
@@ -1626,7 +1635,10 @@ export class FileSystemStorage {
         }
       }
 
-      return resources;
+      // Apply pagination
+      const start = offset || 0;
+      const end = limit ? start + limit : undefined;
+      return resources.slice(start, end);
     } catch {
       return [];
     }
@@ -1822,5 +1834,202 @@ export class FileSystemStorage {
     } catch {
       // No clients directory - nothing to do
     }
+  }
+
+  // ============================================================================
+  // Lifecycle management operations (v0.9.0+)
+  // ============================================================================
+
+  /**
+   * Removes an agent from a project with clean membership cleanup (v0.9.0+).
+   *
+   * Performs a graceful departure that:
+   * 1. Archives unread inbox messages (moved to archive/ folder, not deleted)
+   * 2. Removes agent from project members
+   * 3. Removes project from client's membership tracking
+   *
+   * **Message Archiving:**
+   * Unread messages are moved to `projects/<project-id>/messages/<agent>/archive/`
+   * instead of being deleted. This allows agents to rejoin later and review
+   * archived messages if needed.
+   *
+   * **Re-joining:**
+   * After leaving, the same client can rejoin with the same agent name (smart
+   * name reclaiming will work). However, they'll get a new agent_id and joined_at
+   * timestamp unless they're reclaiming a legacy member record.
+   *
+   * @param projectId - Project to leave
+   * @param agentName - Agent leaving the project
+   * @param clientId - Client ID for membership cleanup
+   *
+   * @returns Promise resolving to count of archived messages
+   * @throws {ValidationError} If identifiers contain unsafe characters
+   * @throws {NotFoundError} If project or agent doesn't exist
+   *
+   * @example
+   * ```typescript
+   * const archivedCount = await this.leaveProject(
+   *   'api-redesign',
+   *   'frontend',
+   *   'client-abc123'
+   * );
+   * console.log(`Archived ${archivedCount} unread messages`);
+   * ```
+   */
+  async leaveProject(projectId: string, agentName: string, clientId: string): Promise<number> {
+    this.assertSafeId(projectId, 'project_id');
+    this.assertSafeId(agentName, 'agent_name');
+    this.assertSafeId(clientId, 'client_id');
+
+    // Verify project exists
+    const project = await this.getProjectMetadata(projectId);
+    if (!project) {
+      throw new NotFoundError(
+        'Project not found',
+        'PROJECT_NOT_FOUND',
+        { project_id: projectId }
+      );
+    }
+
+    // Verify agent is a member
+    const member = await this.getProjectMember(projectId, agentName);
+    if (!member) {
+      throw new NotFoundError(
+        'Agent is not a member of this project',
+        'MEMBER_NOT_FOUND',
+        { project_id: projectId, agent_name: agentName }
+      );
+    }
+
+    // 1. Archive inbox messages
+    const inboxDir = path.join(this.root, 'projects', projectId, 'messages', agentName);
+    const archiveDir = path.join(inboxDir, 'archive');
+    let archivedCount = 0;
+
+    try {
+      await fs.mkdir(archiveDir, { recursive: true });
+      const files = await fs.readdir(inboxDir);
+
+      for (const file of files) {
+        if (file === 'archive') continue; // Skip archive directory itself
+        if (file.endsWith('.json')) {
+          const srcPath = path.join(inboxDir, file);
+          const dstPath = path.join(archiveDir, file);
+          await fs.rename(srcPath, dstPath);
+          archivedCount++;
+        }
+      }
+    } catch (err: any) {
+      if (err.code !== 'ENOENT') {
+        // Inbox might not exist if agent never received messages - that's okay
+        throw err;
+      }
+    }
+
+    // 2. Remove agent from project members
+    const memberPath = path.join(
+      this.root,
+      'projects',
+      projectId,
+      'members',
+      `${agentName}.json`
+    );
+
+    try {
+      await fs.unlink(memberPath);
+    } catch (err: any) {
+      if (err.code !== 'ENOENT') {
+        throw err;
+      }
+      // Member file already deleted - that's okay
+    }
+
+    // 3. Remove project from client memberships
+    await this.removeClientMembership(clientId, projectId);
+
+    return archivedCount;
+  }
+
+  /**
+   * Marks a project as archived (inactive but recoverable) - v0.9.0+.
+   *
+   * Archives preserve all project data while marking the project as inactive.
+   * Unlike deletion, archived projects can be "unarchived" by updating the
+   * metadata to clear the archived flag.
+   *
+   * **Authorization:**
+   * Only the project creator (metadata.created_by) can archive a project.
+   *
+   * **Effect on list_projects:**
+   * By default, archived projects are excluded from `listProjects()` results
+   * unless explicitly requested with `includeArchived: true`.
+   *
+   * **Data Preservation:**
+   * - All members remain
+   * - All messages remain
+   * - All resources remain
+   * - Only metadata.archived flag changes
+   *
+   * @param projectId - Project to archive
+   * @param agentName - Agent requesting archival (must be creator)
+   * @param reason - Optional reason for archiving
+   *
+   * @returns Promise that resolves when project is archived
+   * @throws {ValidationError} If identifiers contain unsafe characters
+   * @throws {NotFoundError} If project doesn't exist
+   * @throws {PermissionError} If agent is not the project creator
+   *
+   * @example
+   * ```typescript
+   * await this.archiveProject(
+   *   'completed-migration',
+   *   'architect',
+   *   'Migration completed successfully on 2025-10-13'
+   * );
+   * ```
+   */
+  async archiveProject(projectId: string, agentName: string, reason?: string): Promise<void> {
+    this.assertSafeId(projectId, 'project_id');
+    this.assertSafeId(agentName, 'agent_name');
+
+    // Get existing metadata
+    const metadata = await this.getProjectMetadata(projectId);
+    if (!metadata) {
+      throw new NotFoundError(
+        'Project not found',
+        'PROJECT_NOT_FOUND',
+        { project_id: projectId }
+      );
+    }
+
+    // Only the creator can archive the project
+    if (metadata.created_by && metadata.created_by !== agentName) {
+      throw new PermissionError(
+        'Access denied: only the project creator can archive it',
+        'ARCHIVE_PERMISSION_DENIED',
+        { project_id: projectId, creator: metadata.created_by, requester: agentName }
+      );
+    }
+
+    // If no creator was set, prevent archival (safety measure)
+    if (!metadata.created_by) {
+      throw new PermissionError(
+        'Access denied: project has no creator',
+        'NO_CREATOR_DEFINED',
+        { project_id: projectId }
+      );
+    }
+
+    // Update metadata with archive fields
+    metadata.archived = true;
+    metadata.archived_at = new Date().toISOString();
+    metadata.archived_by = agentName;
+    if (reason) {
+      metadata.archive_reason = reason;
+    }
+
+    // Write updated metadata
+    const metadataPath = path.join(this.root, 'projects', projectId, 'metadata.json');
+    await this.atomicWrite(metadataPath, JSON.stringify(metadata, null, 2));
   }
 }

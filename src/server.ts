@@ -84,6 +84,54 @@ function generateDeterministicClientId(workingDirectory: string): string {
 }
 
 /**
+ * Resolve client ID with optional environment variable override (v0.9.0+).
+ *
+ * This function provides flexible client identity resolution for different deployment scenarios:
+ * 1. **BRAINSTORM_CLIENT_ID env var** → Use explicit client ID (containerized deployments)
+ * 2. **No env var** → Generate from working directory (default, local development)
+ *
+ * **Use Cases:**
+ * - **Containerized deployments**: Set BRAINSTORM_CLIENT_ID to stable value
+ *   - Working directory changes on container restart
+ *   - Manual client ID ensures consistent identity
+ * - **Local development**: Omit env var for automatic directory-based identity
+ *   - Same directory always produces same client_id
+ *
+ * **Environment Variable:**
+ * - `BRAINSTORM_CLIENT_ID`: Manual client ID override (UUID format recommended)
+ * - Example: `export BRAINSTORM_CLIENT_ID=a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p6`
+ *
+ * **Complexity:** O(n) where n is the length of the working directory string (if no env var)
+ *
+ * @param workingDirectory - Absolute path to the working directory (fallback source)
+ * @returns Client identifier (from env var or generated from directory)
+ *
+ * @example
+ * // Container deployment with explicit client ID
+ * // BRAINSTORM_CLIENT_ID=abc123...
+ * const clientId = resolveClientId('/app/workspace');
+ * // Returns: "abc123..." (from environment)
+ *
+ * // Local development without env var
+ * const clientId = resolveClientId('/Users/alice/projects/frontend');
+ * // Returns: "a3f2b8c1..." (generated from directory)
+ */
+function resolveClientId(workingDirectory: string): string {
+  // Check for manual override via environment variable (v0.9.0+)
+  const envClientId = process.env.BRAINSTORM_CLIENT_ID;
+  if (envClientId) {
+    // Validate it's a non-empty string
+    const trimmed = envClientId.trim();
+    if (trimmed.length > 0 && trimmed.length <= 256) {
+      return trimmed;
+    }
+  }
+
+  // Fall back to directory-based deterministic generation
+  return generateDeterministicClientId(workingDirectory);
+}
+
+/**
  * Load version information with graceful fallback strategy.
  *
  * This function attempts to load version info from multiple sources in order of preference:
@@ -232,6 +280,16 @@ export class AgentCoopServer {
     'status': {
       name: 'status',
       description: 'Show your Brainstorm project memberships for this working directory.',
+      arguments: []
+    },
+    'leave': {
+      name: 'leave',
+      description: 'Leave a project gracefully. I\'ll help you archive your messages and clean up your membership.',
+      arguments: []
+    },
+    'archive': {
+      name: 'archive',
+      description: 'Archive a completed project. I\'ll help you mark it as inactive while preserving all data.',
       arguments: []
     }
   };
@@ -428,10 +486,21 @@ export class AgentCoopServer {
         },
         {
           name: 'list_projects',
-          description: 'List all available projects',
+          description: 'List all available projects. Supports pagination for large project lists (10+ projects).',
           inputSchema: {
             type: 'object',
-            properties: {}
+            properties: {
+              offset: {
+                type: 'number',
+                description: 'Number of projects to skip (default: 0). Use with limit for pagination.',
+                minimum: 0
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum number of projects to return. Omit to return all projects.',
+                minimum: 1
+              }
+            }
           }
         },
         {
@@ -474,7 +543,7 @@ export class AgentCoopServer {
         },
         {
           name: 'receive_messages',
-          description: 'Get messages from your inbox. Supports long-polling to wait for new messages. If a message has reply_expected=true, you should send a response back to the sender.',
+          description: 'Get messages from your inbox. Supports pagination for large inboxes and long-polling to wait for new messages. If a message has reply_expected=true, you should send a response back to the sender.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -486,9 +555,14 @@ export class AgentCoopServer {
                 type: 'string',
                 description: 'Your agent name'
               },
+              offset: {
+                type: 'number',
+                description: 'Number of messages to skip (default: 0). Use with limit for pagination.',
+                minimum: 0
+              },
               limit: {
                 type: 'number',
-                description: 'Maximum number of messages to retrieve'
+                description: 'Maximum number of messages to retrieve. Omit to return all messages.'
               },
               wait: {
                 type: 'boolean',
@@ -621,7 +695,7 @@ export class AgentCoopServer {
         },
         {
           name: 'list_resources',
-          description: 'List all resources in the project you have access to',
+          description: 'List all resources in the project you have access to. Supports pagination for large resource lists.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -632,6 +706,16 @@ export class AgentCoopServer {
               agent_name: {
                 type: 'string',
                 description: 'Your agent name (for filtering accessible resources)'
+              },
+              offset: {
+                type: 'number',
+                description: 'Number of resources to skip (default: 0). Use with limit for pagination.',
+                minimum: 0
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum number of resources to return. Omit to return all accessible resources.',
+                minimum: 1
               }
             },
             required: ['project_id', 'agent_name']
@@ -719,6 +803,50 @@ export class AgentCoopServer {
               }
             },
             required: ['working_directory']
+          }
+        },
+        {
+          name: 'leave_project',
+          description: 'Leave a project gracefully. Archives your unread messages and removes your membership. You can rejoin later to reclaim your agent name.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              project_id: {
+                type: 'string',
+                description: 'Project ID to leave'
+              },
+              agent_name: {
+                type: 'string',
+                description: 'Your agent name in this project'
+              },
+              working_directory: {
+                type: 'string',
+                description: 'Absolute path to your project directory - required for session management'
+              }
+            },
+            required: ['project_id', 'agent_name', 'working_directory']
+          }
+        },
+        {
+          name: 'archive_project',
+          description: 'Mark a project as archived (inactive but recoverable). Only the project creator can archive. Archived projects remain readable but signal completion.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              project_id: {
+                type: 'string',
+                description: 'Project ID to archive'
+              },
+              agent_name: {
+                type: 'string',
+                description: 'Your agent name (must be the project creator)'
+              },
+              reason: {
+                type: 'string',
+                description: 'Optional reason for archiving (e.g., "Project completed", "Goals achieved")'
+              }
+            },
+            required: ['project_id', 'agent_name']
           }
         }
       ];
@@ -812,8 +940,8 @@ export class AgentCoopServer {
               };
             }
 
-            // Generate deterministic client_id from working directory
-            const clientId = generateDeterministicClientId(workingDirectory);
+            // Resolve client_id (env var or directory-based generation)
+            const clientId = resolveClientId(workingDirectory);
 
             const member: ProjectMember = {
               project_id: projectId,
@@ -893,7 +1021,7 @@ export class AgentCoopServer {
               try {
                 const startTime = Date.now();
                 const timeoutMs = timeoutSeconds * 1000;
-                const pollIntervalMs = 1000; // Check every second
+                const pollIntervalMs = 2000; // Check every 2 seconds (v0.9.0 perf optimization)
 
                 while (Date.now() - startTime < timeoutMs) {
                   const metadata = await this.storage.getProjectMetadata(projectId);
@@ -962,14 +1090,21 @@ export class AgentCoopServer {
           }
 
           case 'list_projects': {
-            const projects = await this.storage.listProjects();
+            const offset = args.offset as number | undefined;
+            const limit = args.limit as number | undefined;
+            const projects = await this.storage.listProjects(offset, limit);
 
             return {
               content: [{
                 type: 'text',
                 text: JSON.stringify({
                   projects: projects,
-                  count: projects.length
+                  count: projects.length,
+                  pagination: {
+                    offset: offset || 0,
+                    limit: limit,
+                    returned: projects.length
+                  }
                 }, null, 2)
               }]
             };
@@ -1055,6 +1190,7 @@ export class AgentCoopServer {
           case 'receive_messages': {
             const projectId = args.project_id as string;
             const agentName = args.agent_name as string;
+            const offset = args.offset as number | undefined;
             const limit = args.limit as number | undefined;
             const wait = args.wait as boolean || false;
 
@@ -1088,10 +1224,10 @@ export class AgentCoopServer {
               try {
                 const startTime = Date.now();
                 const timeoutMs = timeoutSeconds * 1000;
-                const pollIntervalMs = 1000; // Check every second
+                const pollIntervalMs = 2000; // Check every 2 seconds (v0.9.0 perf optimization)
 
                 while (Date.now() - startTime < timeoutMs) {
-                  const messages = await this.storage.getAgentInbox(projectId, agentName, limit);
+                  const messages = await this.storage.getAgentInbox(projectId, agentName, offset, limit);
                   if (messages.length > 0) {
                     return {
                       content: [{
@@ -1099,7 +1235,12 @@ export class AgentCoopServer {
                         text: JSON.stringify({
                           messages,
                           count: messages.length,
-                          waited_ms: Date.now() - startTime
+                          waited_ms: Date.now() - startTime,
+                          pagination: {
+                            offset: offset || 0,
+                            limit: limit,
+                            returned: messages.length
+                          }
                         }, null, 2)
                       }]
                     };
@@ -1114,7 +1255,12 @@ export class AgentCoopServer {
                       messages: [],
                       count: 0,
                       waited_ms: Date.now() - startTime,
-                      timeout: true
+                      timeout: true,
+                      pagination: {
+                        offset: offset || 0,
+                        limit: limit,
+                        returned: 0
+                      }
                     }, null, 2)
                   }]
                 };
@@ -1131,14 +1277,19 @@ export class AgentCoopServer {
             }
 
             // Standard non-blocking fetch
-            const messages = await this.storage.getAgentInbox(projectId, agentName, limit);
+            const messages = await this.storage.getAgentInbox(projectId, agentName, offset, limit);
 
             return {
               content: [{
                 type: 'text',
                 text: JSON.stringify({
                   messages,
-                  count: messages.length
+                  count: messages.length,
+                  pagination: {
+                    offset: offset || 0,
+                    limit: limit,
+                    returned: messages.length
+                  }
                 }, null, 2)
               }]
             };
@@ -1239,7 +1390,7 @@ export class AgentCoopServer {
               try {
                 const startTime = Date.now();
                 const timeoutMs = timeoutSeconds * 1000;
-                const pollIntervalMs = 1000; // Check every second
+                const pollIntervalMs = 2000; // Check every 2 seconds (v0.9.0 perf optimization)
 
                 while (Date.now() - startTime < timeoutMs) {
                   try {
@@ -1335,15 +1486,22 @@ export class AgentCoopServer {
           case 'list_resources': {
             const projectId = args.project_id as string;
             const agentName = args.agent_name as string;
+            const offset = args.offset as number | undefined;
+            const limit = args.limit as number | undefined;
 
-            const resources = await this.storage.listResources(projectId, agentName);
+            const resources = await this.storage.listResources(projectId, agentName, offset, limit);
 
             return {
               content: [{
                 type: 'text',
                 text: JSON.stringify({
                   resources,
-                  count: resources.length
+                  count: resources.length,
+                  pagination: {
+                    offset: offset || 0,
+                    limit: limit,
+                    returned: resources.length
+                  }
                 }, null, 2)
               }]
             };
@@ -1466,8 +1624,8 @@ export class AgentCoopServer {
               };
             }
 
-            // Generate deterministic client_id from working directory
-            const clientId = generateDeterministicClientId(workingDirectory);
+            // Resolve client_id (env var or directory-based generation)
+            const clientId = resolveClientId(workingDirectory);
 
             // Store/update client identity
             await this.storage.storeClientIdentity(clientId);
@@ -1504,6 +1662,101 @@ export class AgentCoopServer {
                   projects: projectStatuses,
                   total_projects: projectStatuses.length,
                   total_unread_messages: projectStatuses.reduce((sum, p) => sum + p.unread_messages, 0)
+                }, null, 2)
+              }]
+            };
+          }
+
+          case 'leave_project': {
+            const projectId = args.project_id as string;
+            const agentName = args.agent_name as string;
+            const workingDirectory = args.working_directory as string;
+
+            // Validate working_directory is absolute and normalized
+            if (!isAbsolute(workingDirectory)) {
+              return {
+                content: [{
+                  type: 'text',
+                  text: JSON.stringify({
+                    error: 'working_directory must be an absolute path',
+                    code: 'INVALID_WORKING_DIRECTORY',
+                    details: { working_directory: workingDirectory }
+                  })
+                }],
+                isError: true
+              };
+            }
+
+            const normalizedPath = normalize(workingDirectory);
+            if (normalizedPath !== workingDirectory) {
+              return {
+                content: [{
+                  type: 'text',
+                  text: JSON.stringify({
+                    error: 'working_directory must be normalized (no .. or . segments)',
+                    code: 'INVALID_WORKING_DIRECTORY',
+                    details: {
+                      working_directory: workingDirectory,
+                      normalized: normalizedPath
+                    }
+                  })
+                }],
+                isError: true
+              };
+            }
+
+            // Resolve client_id (env var or directory-based generation)
+            const clientId = resolveClientId(workingDirectory);
+
+            // Leave the project (archives messages, removes membership)
+            const archivedCount = await this.storage.leaveProject(projectId, agentName, clientId);
+
+            await this.storage.auditLog({
+              timestamp: new Date().toISOString(),
+              actor: agentName,
+              action: 'leave_project',
+              target: projectId,
+              details: { client_id: clientId, archived_messages: archivedCount }
+            });
+
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  success: true,
+                  project_id: projectId,
+                  archived_messages: archivedCount,
+                  message: `Left project successfully. ${archivedCount} unread messages archived. You can rejoin later to reclaim your agent name.`
+                }, null, 2)
+              }]
+            };
+          }
+
+          case 'archive_project': {
+            const projectId = args.project_id as string;
+            const agentName = args.agent_name as string;
+            const reason = args.reason as string | undefined;
+
+            // Archive the project (only creator can do this)
+            await this.storage.archiveProject(projectId, agentName, reason);
+
+            await this.storage.auditLog({
+              timestamp: new Date().toISOString(),
+              actor: agentName,
+              action: 'archive_project',
+              target: projectId,
+              details: { reason: reason || 'No reason provided' }
+            });
+
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  success: true,
+                  project_id: projectId,
+                  message: reason
+                    ? `Project archived successfully. Reason: ${reason}`
+                    : 'Project archived successfully. Project remains readable but signals completion.'
                 }, null, 2)
               }]
             };
@@ -1856,6 +2109,82 @@ ${projectList}
 2. Use the \`status\` tool with the working_directory parameter set to that value
 
 The tool will show you all projects you've joined from this directory, including unread message counts.`
+                  }
+                }
+              ]
+            };
+          }
+
+          case 'leave': {
+            // Check status to determine which project to leave
+            return {
+              messages: [
+                {
+                  role: 'user',
+                  content: {
+                    type: 'text',
+                    text: `I want to leave a project gracefully.
+
+**First, let me check your current status:**
+1. Read your working directory from \`<env>\` (look for "Working directory:")
+2. Use the \`status\` tool to see which projects you're currently in
+
+**Then:**
+- If you're in exactly 1 project → I'll confirm which project and your agent name, then leave
+- If you're in multiple projects → I'll ask which project you want to leave
+- If you're in 0 projects → I'll let you know there are no projects to leave
+
+**Please tell me:**
+- Which project do you want to leave? (provide the project_id)
+- What's your agent name in that project?
+
+**I'll then:**
+1. Use \`leave_project\` with your project_id, agent_name, and working_directory
+2. Your unread messages will be archived (preserved in an archive/ folder)
+3. Your project membership will be removed from the client membership tracking
+4. You'll receive a summary of how many messages were archived
+
+**Note**: You can rejoin the project later using the same agent name (session persistence lets you reclaim it).`
+                  }
+                }
+              ]
+            };
+          }
+
+          case 'archive': {
+            // Check which projects user created to determine what can be archived
+            return {
+              messages: [
+                {
+                  role: 'user',
+                  content: {
+                    type: 'text',
+                    text: `I want to archive a completed project.
+
+**First, let me check your current status:**
+1. Read your working directory from \`<env>\` (look for "Working directory:")
+2. Use the \`status\` tool to see your active projects
+
+**Then, let me check which projects you created:**
+3. Use \`list_projects\` to see all available projects
+
+**Please tell me:**
+- Which project do you want to archive? (provide the project_id)
+- What's your agent name in that project?
+- Why are you archiving it? (optional reason, e.g., "Project completed", "Goals achieved")
+
+**Important notes:**
+- Only the project creator can archive a project
+- Archived projects remain readable but signal completion
+- All data (messages, resources, members) is preserved
+- The project's \`archived\` flag will be set to true
+
+**I'll then:**
+1. Verify you are the project creator
+2. Use \`archive_project\` with your project_id, agent_name, and optional reason
+3. Confirm the project has been archived successfully
+
+**Note**: Archiving is different from leaving - it marks the entire project as inactive for all members.`
                   }
                 }
               ]

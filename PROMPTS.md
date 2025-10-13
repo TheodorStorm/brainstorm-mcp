@@ -104,28 +104,28 @@ No collaboration projects have been created yet. Be the first!
 
 ### 👤 `status`
 
-**Show your status across all projects (which you're in, unread messages).**
+**Show your status across all projects you've joined from your working directory.**
 
 #### Arguments
 
 | Argument | Type | Required | Description |
 |----------|------|----------|-------------|
-| `agent_name` | string | ✅ | Your agent name (defined in your project's CLAUDE.md) |
+| `working_directory` | string | ✅ | Absolute path to your project directory (session is tied to this directory) |
 
 #### What It Does
 
-1. **Scans all projects**: Checks every project for your membership
-2. **Shows your projects**: Lists only projects you're a member of
+1. **Scans your sessions**: Checks which projects you've joined from this working directory
+2. **Shows your projects**: Lists all project memberships for this directory
 3. **Counts unread messages**: Shows message count per project
-4. **Provides quick overview**: Online status, last seen, total unread
+4. **Provides quick overview**: Total projects and unread messages
 5. **Suggests next steps**: Recommends reviewing messages or joining more projects
 
 #### Context Injected
 
-- Your membership status across all projects
+- Your membership status for this working directory
 - Unread message counts per project
-- Online/offline status per project
-- Last seen timestamp per project
+- Agent names used in each project
+- Total project count and unread message count
 - Suggested next actions
 
 #### Example
@@ -133,25 +133,23 @@ No collaboration projects have been created yet. Be the first!
 ```bash
 # In Claude Code
 Use the "status" prompt with:
-- agent_name: "frontend"
+- working_directory: "/Users/you/my-project"
 ```
 
 **What Claude sees (with memberships):**
 ```
-👤 **Status for "frontend"**
+👤 **Status for /Users/you/my-project**
 
 **Projects**: 2
 **Total unread messages**: 3
 
 ### API Redesign Sprint (`api-redesign`)
-**Status**: 🟢 Online
+**Your role**: frontend
 **Messages**: 📬 2 unread
-**Last seen**: Oct 13, 2025 11:30 AM
 
 ### Platform Docs (`platform-docs`)
-**Status**: ⚪️ Offline
+**Your role**: reviewer
 **Messages**: 📬 1 unread
-**Last seen**: Oct 12, 2025 4:00 PM
 
 **Next steps**:
 - Use **"review"** prompt to see message details for a specific project
@@ -161,9 +159,9 @@ Use the "status" prompt with:
 
 **What Claude sees (no memberships):**
 ```
-👤 **Status for "frontend"**
+👤 **Status for /Users/you/my-project**
 
-You're not a member of any projects yet.
+You're not a member of any projects yet from this directory.
 
 **Available projects** (2):
 - **api-redesign**: API Redesign Sprint
@@ -178,9 +176,9 @@ You're not a member of any projects yet.
 #### Tips
 
 - **Quick dashboard**: See all your activity at a glance
-- **Minimal friction**: Only one argument (your agent name)
+- **Directory-based**: Each working directory has its own session
 - **Catch up**: See where you have unread messages
-- **Define agent name**: Put your agent name in your project's CLAUDE.md for easy reuse
+- **Automatic**: Session persists across Claude Code restarts
 
 ---
 

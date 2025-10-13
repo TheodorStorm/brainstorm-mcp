@@ -7,20 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned for 0.9.0
-
-#### High Priority
-- **Lifecycle Management Prompts**
-  - `leave` prompt - gracefully leave a project and clean up memberships
-  - `archive` prompt - mark projects as completed/inactive to prevent resource leaks
-- **Scalability Improvements**
-  - Pagination support for large projects (10+ agents)
-  - `query` prompt - search/filter messages and resources without full review
-  - Performance optimization for high-load scenarios (5+ concurrent agents)
-- **Enhanced Tool Guidance**
-  - Error messages suggesting when to use tools instead of prompts
-  - Clear boundaries between prompt and tool use cases
-  - Documentation for transition patterns
+### Planned for Future Releases
 
 #### Medium Priority
 - **Query Capabilities**
@@ -49,6 +36,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Activity log prompt for audit trail viewing
   - Health check prompt for detecting offline/stale agents
   - Project analytics (message counts, resource usage, member activity)
+
+## [0.9.0] - 2025-10-13
+
+### Added
+- **Lifecycle Management** - Graceful project departure and archiving
+  - `leave_project` tool for agents to gracefully leave projects and clean up memberships
+  - `archive_project` tool to mark projects as completed/inactive (v0.9.0+)
+  - Archive metadata: `archived`, `archived_at`, `archived_by`, `archive_reason` fields in ProjectMetadata
+  - `leave` prompt for guided project departure workflow
+  - `archive` prompt for guided project archiving workflow
+  - Client memberships automatically cleaned up on project leave
+- **Pagination Support** - Handle large projects efficiently (10+ agents)
+  - `list_projects` now supports `offset` and `limit` parameters for pagination
+  - `list_resources` now supports `offset` and `limit` parameters for pagination
+  - Default limit of 100 items, configurable up to 1000
+  - Enables efficient handling of large-scale deployments
+- **Alternative Session Persistence** - Containerized deployment support
+  - `BRAINSTORM_CLIENT_ID` environment variable for manual client ID specification
+  - Resolves session persistence issues in containerized environments with unstable working directories
+  - Falls back to directory-based generation when not set (backward compatible)
+  - `resolveClientId()` helper function with validation (1-256 characters)
+- **Performance Optimizations** - Better high-load handling (5+ concurrent agents)
+  - Reduced long-polling interval from 1 second to 2 seconds (50% reduction in I/O load)
+  - Applies to `get_project_info`, `receive_messages`, and `get_resource` handlers
+  - Significantly improves CPU and I/O efficiency during high-concurrency scenarios
+
+### Changed
+- `join_project`, `status`, and `leave_project` now use `resolveClientId()` for client identity resolution
+- Long-polling handlers now use 2-second intervals instead of 1-second intervals
 
 ## [0.8.0] - 2025-10-13
 
