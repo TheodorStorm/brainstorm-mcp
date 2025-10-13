@@ -1,5 +1,48 @@
 /**
- * File system storage abstraction for project-centric agent cooperation
+ * File System Storage Abstraction for Multi-Agent Collaboration
+ *
+ * This module provides a file-system-based storage layer for the Brainstorm MCP server.
+ * It implements project-centric storage with support for projects, members, messages,
+ * resources, and client session persistence.
+ *
+ * **Architecture Principles:**
+ * - **Atomic Operations**: All writes use temp-file-then-rename pattern for crash safety
+ * - **Explicit Locking**: File-based locks prevent race conditions with automatic stale detection
+ * - **Security by Default**: All identifiers validated, deny-by-default permissions
+ * - **Migration Ready**: All operations designed to map directly to SQL transactions
+ *
+ * **Storage Layout:**
+ * ```
+ * <root>/
+ *   projects/<project-id>/
+ *     metadata.json          - Project configuration
+ *     members/               - Agent membership records
+ *       <agent-name>.json
+ *     messages/              - Per-agent inboxes
+ *       <agent-name>/
+ *         <timestamp>-<uuid>.json
+ *     resources/             - Shared resources
+ *       <resource-id>/
+ *         manifest.json      - Metadata and permissions
+ *         payload/data       - Actual content (optional)
+ *   clients/<client-id>/
+ *     identity.json          - Client identity (v0.8.0+)
+ *     memberships.json       - Multi-project tracking
+ *   locks/                   - Concurrency control
+ *     <operation>.lock
+ *   system/
+ *     config.json            - Server configuration
+ *     audit.log              - Operation audit trail
+ * ```
+ *
+ * **Security Features:**
+ * - Path traversal prevention via whitelist validation
+ * - Deny-by-default permission model for resources
+ * - Creator tracking for authorization (internal only)
+ * - Stale lock detection and automatic cleanup
+ *
+ * @module storage
+ * @see {@link AgentCoopServer} for MCP protocol layer
  */
 
 import * as fs from 'fs/promises';
@@ -12,7 +55,9 @@ import type {
   Message,
   ResourceManifest,
   StoredResourceManifest,
-  SystemConfig
+  SystemConfig,
+  ClientIdentity,
+  ClientMembership
 } from './types.js';
 import {
   ValidationError,
@@ -21,13 +66,92 @@ import {
   ConflictError
 } from './errors.js';
 
+/**
+ * File system storage implementation for Brainstorm MCP server.
+ *
+ * Provides atomic operations, explicit locking, and security-conscious storage
+ * for projects, members, messages, resources, and client sessions. All operations
+ * are designed to map directly to database transactions for future migration.
+ *
+ * **Key Features:**
+ * - Atomic writes with fsync for crash safety
+ * - File-based locking with stale detection
+ * - Path traversal prevention (security)
+ * - Optimistic locking via ETags
+ * - Session persistence via deterministic client IDs
+ *
+ * **Thread Safety:**
+ * Uses file-based locks acquired via `O_CREAT|O_EXCL` flag. Stale locks (>30s)
+ * are automatically detected and removed. All mutations are protected by locks.
+ *
+ * @example
+ * ```typescript
+ * const storage = new FileSystemStorage('/Users/alice/.brainstorm');
+ * await storage.initialize();
+ *
+ * // Create a project
+ * await storage.createProject({
+ *   project_id: 'api-redesign',
+ *   name: 'API Redesign Sprint',
+ *   created_at: new Date().toISOString(),
+ *   created_by: 'architect',
+ *   schema_version: '1.0'
+ * });
+ *
+ * // Join as agent
+ * await storage.joinProject({
+ *   project_id: 'api-redesign',
+ *   agent_name: 'frontend',
+ *   agent_id: randomUUID(),
+ *   client_id: 'client-abc123',
+ *   joined_at: new Date().toISOString(),
+ *   last_seen: new Date().toISOString(),
+ *   online: true
+ * });
+ * ```
+ */
 export class FileSystemStorage {
+  /** Absolute path to storage root directory */
   private root: string;
 
+  /**
+   * Creates a new file system storage instance.
+   *
+   * @param rootPath - Absolute path to storage root (typically ~/.brainstorm)
+   *
+   * @example
+   * ```typescript
+   * const storage = new FileSystemStorage(path.join(os.homedir(), '.brainstorm'));
+   * await storage.initialize();
+   * ```
+   */
   constructor(rootPath: string) {
     this.root = rootPath;
   }
 
+  /**
+   * Initializes the storage directory structure and creates default configuration.
+   *
+   * Creates the root directory and subdirectories for projects, locks, system data,
+   * and clients. If no configuration exists, writes default configuration to
+   * `<root>/system/config.json`.
+   *
+   * **Directory Structure Created:**
+   * - `<root>/projects/` - Project data
+   * - `<root>/locks/` - Concurrency control
+   * - `<root>/system/` - Configuration and audit logs
+   *
+   * **Idempotent:** Safe to call multiple times; existing directories and config are preserved.
+   *
+   * @returns Promise that resolves when initialization completes
+   *
+   * @example
+   * ```typescript
+   * const storage = new FileSystemStorage('/Users/alice/.brainstorm');
+   * await storage.initialize();
+   * // Storage is now ready for use
+   * ```
+   */
   async initialize(): Promise<void> {
     await fs.mkdir(this.root, { recursive: true });
     await fs.mkdir(path.join(this.root, 'projects'), { recursive: true });
@@ -56,6 +180,37 @@ export class FileSystemStorage {
   // Security: ID validation
   // ============================================================================
 
+  /**
+   * Validates that an identifier is safe for use in file paths (security).
+   *
+   * Prevents path traversal attacks by enforcing whitelist validation:
+   * - Only allows alphanumeric, dash, underscore characters
+   * - Rejects dots, slashes, backslashes
+   * - Length must be 1-256 characters
+   *
+   * **Security Rationale:**
+   * User-controlled identifiers (project_id, agent_name, resource_id) are used to
+   * construct file paths. Without validation, an attacker could inject "../" sequences
+   * to escape the storage root and access arbitrary files.
+   *
+   * @param id - Identifier to validate (project_id, agent_name, etc.)
+   * @param context - Human-readable field name for error messages
+   *
+   * @throws {ValidationError} If ID contains unsafe characters, path traversal sequences,
+   *   or has invalid length
+   *
+   * @example
+   * ```typescript
+   * // Valid IDs
+   * this.assertSafeId('api-redesign', 'project_id'); // OK
+   * this.assertSafeId('frontend_agent', 'agent_name'); // OK
+   *
+   * // Invalid IDs (throw ValidationError)
+   * this.assertSafeId('../etc/passwd', 'project_id'); // PATH_TRAVERSAL_DETECTED
+   * this.assertSafeId('test.project', 'project_id'); // INVALID_ID_FORMAT (dots not allowed)
+   * this.assertSafeId('', 'agent_name'); // INVALID_ID_LENGTH
+   * ```
+   */
   private assertSafeId(id: string, context: string): void {
     // Remove dots to prevent path traversal attacks
     if (!/^[A-Za-z0-9_-]+$/.test(id)) {
@@ -82,6 +237,37 @@ export class FileSystemStorage {
     }
   }
 
+  /**
+   * Validates that a file path is safe for resource references (security).
+   *
+   * Prevents path traversal and ensures file references stay within the user's
+   * home directory. Used when agents specify `source_path` for large file resources.
+   *
+   * **Security Checks:**
+   * 1. Rejects path traversal sequences (`..`, `~`)
+   * 2. Ensures resolved path is within home directory
+   * 3. Verifies file exists and is readable
+   * 4. Confirms path points to a regular file (not directory/socket)
+   *
+   * @param filePath - File path to validate (from agent's source_path parameter)
+   * @param context - Human-readable field name for error messages
+   *
+   * @returns Promise that resolves if path is safe
+   * @throws {ValidationError} If path contains unsafe characters, escapes home directory,
+   *   file doesn't exist/isn't readable, or path isn't a regular file
+   *
+   * @example
+   * ```typescript
+   * // Valid paths
+   * await this.assertSafePath('/Users/alice/docs/spec.pdf', 'source_path'); // OK
+   *
+   * // Invalid paths (throw ValidationError)
+   * await this.assertSafePath('../../../etc/passwd', 'source_path'); // PATH_OUTSIDE_HOME
+   * await this.assertSafePath('~/../../root/.ssh/id_rsa', 'source_path'); // UNSAFE_PATH
+   * await this.assertSafePath('/etc/hosts', 'source_path'); // PATH_OUTSIDE_HOME
+   * await this.assertSafePath('/Users/alice/missing.txt', 'source_path'); // FILE_NOT_ACCESSIBLE
+   * ```
+   */
   private async assertSafePath(filePath: string, context: string): Promise<void> {
     // Resolve to absolute path
     const resolvedPath = path.resolve(filePath);
@@ -133,6 +319,33 @@ export class FileSystemStorage {
   // Atomic file operations
   // ============================================================================
 
+  /**
+   * Atomically writes content to a file with crash safety guarantees.
+   *
+   * Uses the standard atomic write pattern:
+   * 1. Write to temporary file with unique UUID name
+   * 2. Call fsync() to flush to disk
+   * 3. Atomically rename temp file to target path
+   *
+   * This ensures that a crash or power loss during write will never leave
+   * a partially-written file. Either the write completes fully or not at all.
+   *
+   * **Complexity:** O(1) file operations, O(n) for content size
+   *
+   * @param filePath - Absolute path to target file
+   * @param content - String content to write (UTF-8 encoded)
+   *
+   * @returns Promise that resolves when write completes
+   * @throws {Error} If file system operations fail
+   *
+   * @example
+   * ```typescript
+   * await this.atomicWrite(
+   *   '/Users/alice/.brainstorm/projects/api-redesign/metadata.json',
+   *   JSON.stringify(projectMetadata, null, 2)
+   * );
+   * ```
+   */
   private async atomicWrite(filePath: string, content: string): Promise<void> {
     const dir = path.dirname(filePath);
     await fs.mkdir(dir, { recursive: true });
@@ -151,6 +364,53 @@ export class FileSystemStorage {
   // Locking
   // ============================================================================
 
+  /**
+   * Acquires an exclusive file-based lock with automatic stale lock detection.
+   *
+   * Uses the `O_CREAT|O_EXCL` flag (`wx` mode) to atomically create lock files,
+   * preventing race conditions. Supports automatic stale lock removal (locks older
+   * than 30 seconds) and configurable timeout for lock acquisition.
+   *
+   * **Locking Strategy:**
+   * - Lock files stored in `<root>/locks/<lockName>.lock`
+   * - Contains metadata: acquired_at, pid, reason, lock_name
+   * - Stale locks (>30s) automatically removed with warning log
+   * - Returns unlock function for cleanup
+   *
+   * **When to Use:**
+   * - Member status updates (prevent concurrent heartbeat conflicts)
+   * - Message inbox modifications (mark as processed)
+   * - Audit log appends (serialize writes)
+   * - Project member joins (smart name reclaiming)
+   *
+   * **Complexity:** O(1) for successful acquisition, O(k) for k retries during contention
+   *
+   * @param lockName - Unique lock identifier (validated via assertSafeId)
+   * @param options - Optional configuration
+   * @param options.timeout_ms - Maximum wait time in milliseconds (default: 60000ms / 60s)
+   * @param options.reason - Human-readable reason for debugging (included in lock metadata)
+   *
+   * @returns Promise resolving to unlock function (call to release lock)
+   * @throws {ValidationError} If lock acquisition times out or lockName is invalid
+   *
+   * @example
+   * ```typescript
+   * const unlock = await this.acquireLock('member-api-redesign-frontend', {
+   *   reason: 'heartbeat-update-online',
+   *   timeout_ms: 5000
+   * });
+   *
+   * try {
+   *   // Perform critical section work
+   *   const member = await this.getProjectMember(projectId, agentName);
+   *   member.online = true;
+   *   member.last_seen = new Date().toISOString();
+   *   await this.atomicWrite(memberPath, JSON.stringify(member, null, 2));
+   * } finally {
+   *   await unlock(); // Always release lock
+   * }
+   * ```
+   */
   async acquireLock(
     lockName: string,
     options?: {
@@ -242,6 +502,20 @@ export class FileSystemStorage {
   // System operations
   // ============================================================================
 
+  /**
+   * Retrieves the system configuration from disk.
+   *
+   * Reads `<root>/system/config.json` containing server-wide settings like
+   * message TTL, heartbeat timeout, lock timeouts, and resource size limits.
+   *
+   * @returns Promise resolving to SystemConfig or null if config doesn't exist
+   *
+   * @example
+   * ```typescript
+   * const config = await this.getSystemConfig();
+   * const maxSize = config?.max_resource_size_bytes || 512000;
+   * ```
+   */
   async getSystemConfig(): Promise<SystemConfig | null> {
     try {
       const content = await fs.readFile(
@@ -254,6 +528,36 @@ export class FileSystemStorage {
     }
   }
 
+  /**
+   * Appends an entry to the append-only audit log with lock serialization.
+   *
+   * All server operations (project creation, message sending, resource storage, etc.)
+   * are logged to `<root>/system/audit.log` for accountability and debugging. The log
+   * is append-only (never modified or deleted) and protected by a lock to prevent
+   * concurrent write conflicts.
+   *
+   * **Log Format:** One JSON object per line (newline-delimited JSON)
+   *
+   * @param entry - Audit log entry
+   * @param entry.timestamp - ISO 8601 timestamp of the operation
+   * @param entry.actor - Agent performing the operation (or 'system')
+   * @param entry.action - Operation name (e.g., 'create_project', 'send_message')
+   * @param entry.target - Optional target identifier (project_id, resource_id, etc.)
+   * @param entry.details - Optional additional context
+   *
+   * @returns Promise that resolves when log entry is written
+   *
+   * @example
+   * ```typescript
+   * await this.auditLog({
+   *   timestamp: new Date().toISOString(),
+   *   actor: 'frontend',
+   *   action: 'store_resource',
+   *   target: 'api-spec-v2',
+   *   details: { project_id: 'api-redesign', size_bytes: 15420 }
+   * });
+   * ```
+   */
   async auditLog(entry: {
     timestamp: string;
     actor: string;
@@ -278,6 +582,44 @@ export class FileSystemStorage {
   // Project operations
   // ============================================================================
 
+  /**
+   * Creates a new project with atomic check-and-create semantics.
+   *
+   * Uses `fs.mkdir(path, { recursive: false })` to atomically verify that the project
+   * doesn't exist and create it. This prevents race conditions where two agents try to
+   * create the same project simultaneously.
+   *
+   * **Directory Structure Created:**
+   * ```
+   * <root>/projects/<project_id>/
+   *   metadata.json       - Project configuration
+   *   members/            - Agent membership records
+   *   messages/           - Per-agent inboxes
+   *   resources/          - Shared resources
+   * ```
+   *
+   * **Race Condition Safety:**
+   * The `recursive: false` flag ensures mkdir fails with EEXIST if the directory already
+   * exists, making this operation atomic. No TOCTOU (Time-of-Check-Time-of-Use) vulnerability.
+   *
+   * @param metadata - Project metadata (must include project_id, name, created_at, schema_version)
+   *
+   * @returns Promise that resolves when project is created
+   * @throws {ValidationError} If project_id contains unsafe characters
+   * @throws {ConflictError} If project already exists (PROJECT_EXISTS)
+   *
+   * @example
+   * ```typescript
+   * await this.createProject({
+   *   project_id: 'api-redesign',
+   *   name: 'API Redesign Sprint',
+   *   description: 'Modernize REST API to GraphQL',
+   *   created_at: new Date().toISOString(),
+   *   created_by: 'architect',
+   *   schema_version: '1.0'
+   * });
+   * ```
+   */
   async createProject(metadata: ProjectMetadata): Promise<void> {
     this.assertSafeId(metadata.project_id, 'project_id');
 
@@ -391,9 +733,65 @@ export class FileSystemStorage {
   // Project member operations
   // ============================================================================
 
+  /**
+   * Adds or updates a project member with smart name reclaiming (v0.8.0+).
+   *
+   * Handles agent membership with support for session persistence via client_id.
+   * Implements sophisticated name reclaiming logic that allows the same client to
+   * reclaim their agent name across reconnections while preventing name stealing
+   * by different clients.
+   *
+   * **Smart Name Reclaiming Logic (v0.8.0):**
+   * 1. **Same client_id**: Reclaim name, preserve agent_id and joined_at
+   * 2. **Different client_id**: Reject (name truly taken)
+   * 3. **Legacy member (no client_id)**: Allow claim, backfill client_id, preserve identity
+   * 4. **Both lack client_id**: Reject (backward compatible)
+   *
+   * **Locking:**
+   * Acquires lock `join_<project_id>_<agent_name>` to prevent race conditions where
+   * two clients try to claim the same name simultaneously.
+   *
+   * **Complexity:** O(1) with lock acquisition overhead (see acquireLock)
+   *
+   * @param member - Project member record to create/update
+   *
+   * @returns Promise that resolves when member is successfully joined
+   * @throws {ValidationError} If project_id or agent_name contains unsafe characters
+   * @throws {NotFoundError} If project doesn't exist (PROJECT_NOT_FOUND)
+   * @throws {ConflictError} If agent name is taken by another client (AGENT_NAME_TAKEN)
+   *
+   * @example
+   * ```typescript
+   * // First join
+   * await this.joinProject({
+   *   project_id: 'api-redesign',
+   *   agent_name: 'frontend',
+   *   agent_id: randomUUID(),
+   *   client_id: 'client-abc123',
+   *   joined_at: new Date().toISOString(),
+   *   last_seen: new Date().toISOString(),
+   *   online: true
+   * });
+   *
+   * // Reconnect with same client_id - reclaims name
+   * await this.joinProject({
+   *   project_id: 'api-redesign',
+   *   agent_name: 'frontend', // Same name
+   *   agent_id: randomUUID(), // Different UUID
+   *   client_id: 'client-abc123', // SAME client_id
+   *   joined_at: new Date().toISOString(), // Will be overwritten with original
+   *   last_seen: new Date().toISOString(),
+   *   online: true
+   * });
+   * // Result: Original agent_id and joined_at are preserved
+   * ```
+   */
   async joinProject(member: ProjectMember): Promise<void> {
     this.assertSafeId(member.project_id, 'project_id');
     this.assertSafeId(member.agent_name, 'agent_name');
+    if (member.client_id) {
+      this.assertSafeId(member.client_id, 'client_id');
+    }
 
     // Check if project exists
     const project = await this.getProjectMetadata(member.project_id);
@@ -405,14 +803,52 @@ export class FileSystemStorage {
       );
     }
 
-    // Check if agent name is already taken
-    const existing = await this.getProjectMember(member.project_id, member.agent_name);
+    // Lock for the entire check-and-claim operation to prevent race conditions
+    const lockKey = `join_${member.project_id}_${member.agent_name}`;
+    const unlock = await this.acquireLock(lockKey, {
+      reason: `join-project-${member.agent_name}`,
+      timeout_ms: 10000
+    });
+
+    try {
+      // Check if agent name is already taken
+      const existing = await this.getProjectMember(member.project_id, member.agent_name);
+
     if (existing) {
-      throw new ConflictError(
-        'Agent name already taken in this project',
-        'AGENT_NAME_TAKEN',
-        { project_id: member.project_id, agent_name: member.agent_name }
-      );
+      // Smart reclaim logic: allow same client to reclaim their name
+      if (member.client_id && existing.client_id === member.client_id) {
+        // Same client reclaiming their name - preserve identity
+        member.joined_at = existing.joined_at; // Keep original join date
+        member.agent_id = existing.agent_id;    // Keep same agent_id
+        // Fall through to write updated member record
+      } else if (existing.client_id && member.client_id && existing.client_id !== member.client_id) {
+        // Different client - name truly taken
+        throw new ConflictError(
+          'Agent name already taken in this project by another client',
+          'AGENT_NAME_TAKEN',
+          { project_id: member.project_id, agent_name: member.agent_name }
+        );
+      } else if (!existing.client_id && !member.client_id) {
+        // Legacy: Both lack client_id - reject (backward compatible)
+        throw new ConflictError(
+          'Agent name already taken in this project',
+          'AGENT_NAME_TAKEN',
+          { project_id: member.project_id, agent_name: member.agent_name }
+        );
+      } else if (!existing.client_id && member.client_id) {
+        // Legacy member (no client_id) - FREE TO CLAIM
+        // Preserve identity continuity from the legacy member
+        member.joined_at = existing.joined_at; // Keep original join date
+        member.agent_id = existing.agent_id;    // Keep same agent_id
+        // Fall through to write updated member record with backfilled client_id
+      } else {
+        // Edge case: new member lacks client_id (shouldn't happen in v0.8.0+)
+        throw new ConflictError(
+          'Agent name already taken in this project',
+          'AGENT_NAME_TAKEN',
+          { project_id: member.project_id, agent_name: member.agent_name }
+        );
+      }
     }
 
     const memberPath = path.join(
@@ -423,13 +859,16 @@ export class FileSystemStorage {
       `${member.agent_name}.json`
     );
 
-    // Create member's inbox directory
-    await fs.mkdir(
-      path.join(this.root, 'projects', member.project_id, 'messages', member.agent_name),
-      { recursive: true }
-    );
+      // Create member's inbox directory
+      await fs.mkdir(
+        path.join(this.root, 'projects', member.project_id, 'messages', member.agent_name),
+        { recursive: true }
+      );
 
-    await this.atomicWrite(memberPath, JSON.stringify(member, null, 2));
+      await this.atomicWrite(memberPath, JSON.stringify(member, null, 2));
+    } finally {
+      await unlock();
+    }
   }
 
   async getProjectMember(projectId: string, agentName: string): Promise<ProjectMember | null> {
@@ -702,6 +1141,95 @@ export class FileSystemStorage {
     }
   }
 
+  /**
+   * Stores or updates a resource with permission checks, optimistic locking, and creator tracking.
+   *
+   * Handles the most complex storage operation in Brainstorm, implementing:
+   * - Deny-by-default permissions (v0.2.0)
+   * - Optimistic locking via ETags (prevents concurrent modification conflicts)
+   * - Creator-only permission updates (security)
+   * - Auto-granted creator write access (legacy backfill)
+   * - File references for large files (v0.4.0, >50KB)
+   *
+   * **Storage Options:**
+   * - **Inline content**: Pass `payload` parameter for small data (<50KB)
+   * - **File reference**: Pass `localPath` parameter for large files (stored as source_path)
+   *
+   * **Permission Model (v0.2.0):**
+   * - New resources: Default to public read ('*'), creator-only write
+   * - Updates: Only agents with write permission can modify
+   * - Creator: Auto-granted write access even if not in permissions array
+   * - Permission updates: Only creator can change permissions
+   *
+   * **Optimistic Locking:**
+   * - Pass back exact `etag` from getResource when updating
+   * - If etag mismatch, throws ETAG_MISMATCH (resource was modified by another agent)
+   *
+   * **Creator Tracking:**
+   * - `creator_agent` stored internally (NEVER exposed to agents for security)
+   * - Used for authorization (only creator can update permissions)
+   * - Legacy resources without creator: backfilled on first update
+   *
+   * @param manifest - Resource manifest (external type, creator_agent field forbidden)
+   * @param agentName - Agent performing this operation (validated against permissions)
+   * @param payload - Optional inline content (string or Buffer, <50KB limit)
+   * @param localPath - Optional file path for large files (>50KB, validated via assertSafePath)
+   *
+   * @returns Promise that resolves when resource is stored
+   * @throws {ValidationError} If resource_id unsafe, payload >50KB, JSON depth >100, or conflicting parameters
+   * @throws {NotFoundError} If project or agent doesn't exist
+   * @throws {PermissionError} If agent lacks write permission
+   * @throws {ConflictError} If etag mismatch (resource modified by another agent)
+   *
+   * @example
+   * ```typescript
+   * // Store small inline resource
+   * await this.storeResource(
+   *   {
+   *     project_id: 'api-redesign',
+   *     resource_id: 'api-spec-v2',
+   *     name: 'API Specification v2.0',
+   *     created_at: new Date().toISOString(),
+   *     updated_at: new Date().toISOString(),
+   *     etag: '', // Empty for new resource
+   *     permissions: {
+   *       read: ['*'], // Public read
+   *       write: ['architect'] // Creator only
+   *     }
+   *   },
+   *   'architect', // Operating agent
+   *   JSON.stringify({ endpoints: [...] }) // Inline content
+   * );
+   *
+   * // Store large file reference
+   * await this.storeResource(
+   *   {
+   *     project_id: 'api-redesign',
+   *     resource_id: 'design-mockups',
+   *     name: 'UI Design Mockups',
+   *     created_at: new Date().toISOString(),
+   *     updated_at: new Date().toISOString(),
+   *     etag: '',
+   *     permissions: { read: ['frontend', 'designer'], write: ['designer'] }
+   *   },
+   *   'designer',
+   *   undefined, // No inline payload
+   *   '/Users/alice/Documents/mockups.pdf' // File reference
+   * );
+   *
+   * // Update existing resource (requires etag)
+   * const existing = await this.getResource('api-redesign', 'api-spec-v2', 'architect');
+   * await this.storeResource(
+   *   {
+   *     ...existing.manifest,
+   *     etag: existing.manifest.etag, // MUST match current etag
+   *     updated_at: new Date().toISOString()
+   *   },
+   *   'architect',
+   *   JSON.stringify({ endpoints: [...] }) // Updated content
+   * );
+   * ```
+   */
   async storeResource(manifest: ResourceManifest, agentName: string, payload?: string | Buffer, localPath?: string): Promise<void> {
     this.assertSafeId(manifest.project_id, 'project_id');
     this.assertSafeId(manifest.resource_id, 'resource_id');
@@ -1154,6 +1682,145 @@ export class FileSystemStorage {
         return;
       }
       throw err;
+    }
+  }
+
+  // ============================================================================
+  // Client identity and session persistence operations (v0.8.0+)
+  // ============================================================================
+
+  async storeClientIdentity(clientId: string): Promise<void> {
+    this.assertSafeId(clientId, 'client_id');
+
+    const clientDir = path.join(this.root, 'clients', clientId);
+    await fs.mkdir(clientDir, { recursive: true });
+
+    const identityPath = path.join(clientDir, 'identity.json');
+
+    // Check if identity already exists
+    let identity: ClientIdentity;
+    try {
+      const existing = await fs.readFile(identityPath, 'utf-8');
+      identity = JSON.parse(existing);
+      identity.last_seen = new Date().toISOString();
+    } catch {
+      // New identity
+      identity = {
+        client_id: clientId,
+        created_at: new Date().toISOString(),
+        last_seen: new Date().toISOString()
+      };
+    }
+
+    await this.atomicWrite(identityPath, JSON.stringify(identity, null, 2));
+  }
+
+  async getClientIdentity(clientId: string): Promise<ClientIdentity | null> {
+    this.assertSafeId(clientId, 'client_id');
+
+    try {
+      const identityPath = path.join(this.root, 'clients', clientId, 'identity.json');
+      const content = await fs.readFile(identityPath, 'utf-8');
+      return JSON.parse(content);
+    } catch {
+      return null;
+    }
+  }
+
+  async recordClientMembership(
+    clientId: string,
+    projectId: string,
+    agentName: string,
+    projectName: string
+  ): Promise<void> {
+    this.assertSafeId(clientId, 'client_id');
+    this.assertSafeId(projectId, 'project_id');
+    this.assertSafeId(agentName, 'agent_name');
+
+    const clientDir = path.join(this.root, 'clients', clientId);
+    await fs.mkdir(clientDir, { recursive: true });
+
+    const membershipsPath = path.join(clientDir, 'memberships.json');
+
+    // Load existing memberships
+    let memberships: ClientMembership[] = [];
+    try {
+      const content = await fs.readFile(membershipsPath, 'utf-8');
+      memberships = JSON.parse(content);
+    } catch {
+      // No existing memberships
+    }
+
+    // Check if membership already exists
+    const existingIndex = memberships.findIndex(m => m.project_id === projectId);
+
+    if (existingIndex >= 0) {
+      // Update existing membership
+      memberships[existingIndex] = {
+        project_id: projectId,
+        agent_name: agentName,
+        project_name: projectName,
+        joined_at: memberships[existingIndex].joined_at // Keep original join date
+      };
+    } else {
+      // Add new membership
+      memberships.push({
+        project_id: projectId,
+        agent_name: agentName,
+        project_name: projectName,
+        joined_at: new Date().toISOString()
+      });
+    }
+
+    await this.atomicWrite(membershipsPath, JSON.stringify(memberships, null, 2));
+  }
+
+  async getClientMemberships(clientId: string): Promise<ClientMembership[]> {
+    this.assertSafeId(clientId, 'client_id');
+
+    try {
+      const membershipsPath = path.join(this.root, 'clients', clientId, 'memberships.json');
+      const content = await fs.readFile(membershipsPath, 'utf-8');
+      return JSON.parse(content);
+    } catch {
+      return [];
+    }
+  }
+
+  async removeClientMembership(clientId: string, projectId: string): Promise<void> {
+    this.assertSafeId(clientId, 'client_id');
+    this.assertSafeId(projectId, 'project_id');
+
+    const membershipsPath = path.join(this.root, 'clients', clientId, 'memberships.json');
+
+    try {
+      const content = await fs.readFile(membershipsPath, 'utf-8');
+      let memberships: ClientMembership[] = JSON.parse(content);
+
+      // Filter out the membership
+      memberships = memberships.filter(m => m.project_id !== projectId);
+
+      await this.atomicWrite(membershipsPath, JSON.stringify(memberships, null, 2));
+    } catch {
+      // No memberships file - nothing to do
+    }
+  }
+
+  async removeProjectFromAllClients(projectId: string): Promise<void> {
+    this.assertSafeId(projectId, 'project_id');
+
+    const clientsDir = path.join(this.root, 'clients');
+
+    try {
+      const clientDirs = await fs.readdir(clientsDir, { withFileTypes: true });
+
+      for (const clientDir of clientDirs) {
+        if (clientDir.isDirectory()) {
+          await this.removeClientMembership(clientDir.name, projectId);
+        }
+      }
+    } catch {
+      // No clients directory - nothing to do
     }
   }
 }

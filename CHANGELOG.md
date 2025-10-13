@@ -7,6 +7,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned for 0.9.0
+
+#### High Priority
+- **Lifecycle Management Prompts**
+  - `leave` prompt - gracefully leave a project and clean up memberships
+  - `archive` prompt - mark projects as completed/inactive to prevent resource leaks
+- **Scalability Improvements**
+  - Pagination support for large projects (10+ agents)
+  - `query` prompt - search/filter messages and resources without full review
+  - Performance optimization for high-load scenarios (5+ concurrent agents)
+- **Enhanced Tool Guidance**
+  - Error messages suggesting when to use tools instead of prompts
+  - Clear boundaries between prompt and tool use cases
+  - Documentation for transition patterns
+
+#### Medium Priority
+- **Query Capabilities**
+  - Filter messages by sender, date range, or content
+  - Search resources by name, type, or tags
+  - Summary views for large inboxes
+- **Inference Improvements**
+  - Manual override parameter for reply_expected when auto-detection fails
+  - Confidence scoring for question detection
+  - Fallback strategies for ambiguous messages
+- **Alternative Session Persistence**
+  - Environment variable-based client IDs for containerized deployments
+  - Support for multiple clients in same working directory
+  - Recovery mechanism for directory renames
+
+#### Low Priority
+- **Resource Conflict Resolution**
+  - Version history tracking for shared resources
+  - Merge support for concurrent edits
+  - Conflict detection and resolution prompts
+- **Message Threading**
+  - Thread IDs for broadcast reply chains
+  - Conversation grouping in review dashboard
+  - Reply-to references for direct messages
+- **Monitoring & Observability**
+  - Activity log prompt for audit trail viewing
+  - Health check prompt for detecting offline/stale agents
+  - Project analytics (message counts, resource usage, member activity)
+
+## [0.8.0] - 2025-10-13
+
+### Added
+- **Session Persistence** - Automatic client tracking across restarts
+  - Working directory-based client IDs (deterministic SHA-256 hash)
+  - `join_project` now requires `working_directory` parameter for session tracking
+  - `status` tool now shows all projects for your working directory (replaces agent_name parameter)
+  - Client membership records persist across sessions
+  - Project deletion automatically cleans up client memberships
+- **Legacy Member Migration** - Seamless upgrade path from pre-v0.8.0
+  - Agent names without `client_id` can be reclaimed by any client (convenience for local use)
+  - Identity continuity preserved: `agent_id` and `joined_at` kept from legacy member
+  - Automatic backfill of `client_id` when legacy names are claimed
+- **MCP Prompts** - 8 conversational prompts for guided workflows (zero-parameter design)
+  - `list` - List all projects (no arguments needed!)
+  - `status` - Show your status across projects
+  - `create` - Create project and auto-join with conflict detection
+  - `join` - Join with role suggestions and current member list
+  - `broadcast` - Send to all with guided reply_expected usage
+  - `review` - Full project dashboard (members, messages, resources)
+  - `share` - Publish resources with team notification
+  - `discuss` - Reply with recent message context
+- **Context Injection** - Prompts query storage to inject real-time state
+  - Current members with online/offline status
+  - Recent messages and unread counts
+  - Available resources and suggested roles
+  - Existing project IDs and conflict warnings
+- **Smart Inference** - Prompts intelligently suggest values
+  - Conversational parameter gathering (prompts ask for missing info)
+  - Auto-detect reply_expected from message content (questions, requests)
+  - Suggest available roles based on existing team members
+  - Generate safe IDs from human-readable names
+- **Enhanced reply_expected Guidance** - Comprehensive usage instructions
+  - Tool description emphasizes binding commitment ("CRITICAL" prefix)
+  - Parameter description clarifies when to use true vs false
+  - Three messaging prompts (broadcast, share, discuss) include detailed guidance
+  - Clear decision heuristics: questions/requests → true, informational → false
+- **Comprehensive prompt documentation** in new PROMPTS.md file
+- **Discovery-first design** - Start with zero-argument `list` prompt, then explore
+
 ## [0.6.0] - 2025-10-09
 
 ### Added

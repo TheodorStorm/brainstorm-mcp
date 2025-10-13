@@ -1,3 +1,4 @@
 # Debate Topic
 
-Consciousness cannot be reduced to physical processes.
+Generative AI is the biggest threat to humanity since the atomic bomb.
+

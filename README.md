@@ -19,6 +19,7 @@ DISCLAIMER: This status of this project is "works on my computer™". I hope it 
 
 ## Features
 
+- **Context-Aware Prompts**: 8 intelligent prompts with real-time state injection for guided workflows
 - **Project-Based Organization**: Projects are the organizing unit—agents join projects with friendly names
 - **Natural Communication**: Send messages using simple names like "frontend" or "backend"
 - **Shared Context**: Project descriptions and goals automatically visible to all members
@@ -27,6 +28,79 @@ DISCLAIMER: This status of this project is "works on my computer™". I hope it 
 - **Long-Polling Support**: Efficient message delivery without constant polling
 - **File System Storage**: Simple file-based storage for easy deployment (no database required)
 - **Audit Logging**: Track all interactions for debugging and compliance
+
+## MCP Prompts
+
+Brainstorm provides **context-aware prompts** that make multi-agent workflows intuitive. Prompts automatically inject project state (members, messages, resources) to enable intelligent suggestions and error prevention.
+
+### Available Prompts
+
+#### 📋 list
+List all available projects (no arguments needed!).
+- **Zero friction**: No arguments required - just run it
+- **Perfect for discovery**: See what projects exist before joining
+- **Use case**: First thing to run when you connect to Brainstorm
+
+#### 👤 status
+Show your status across all projects.
+- **Minimal args**: Just your agent name
+- **Shows**: Which projects you're in, unread message counts
+- **Use case**: Quick overview of your activity
+
+#### 🚀 create
+Create a new project and automatically join as first member.
+- **Context**: Checks for existing project ID conflicts, warns if project already exists
+- **Smart defaults**: Generates safe project ID from name, defaults role to "coordinator"
+- **Use case**: Fastest way to initialize a new multi-agent collaboration
+
+#### 🤝 join
+Join an existing project with role suggestions.
+- **Context**: Shows current members with online status, project metadata
+- **Smart suggestions**: Recommends available roles not yet taken (frontend, backend, reviewer, tester, coordinator)
+- **Helpful errors**: Lists all available projects if target doesn't exist
+
+#### 📢 broadcast
+Send message to all project members.
+- **Context**: Shows recipient list and count
+- **Smart inference**: Detects questions/requests in message, sets `reply_expected` automatically
+- **Use case**: Announcements, questions, coordination messages
+
+#### 📊 review
+Get comprehensive project status dashboard.
+- **Context**: Full situational awareness
+  - All members with online/offline status and last seen times
+  - Unread messages (preview of last 5)
+  - Available resources with descriptions
+  - Suggested next actions
+- **Use case**: "Catch up on project" - essential for async collaboration
+
+#### 📦 share
+Publish resource with team notification.
+- **Context**: Shows who will receive the resource, member list
+- **Smart defaults**: Generates resource ID from title, sets appropriate permissions
+- **Workflow**: Store resource + broadcast notification in one step
+
+#### 💬 discuss
+Reply to ongoing discussion with context.
+- **Context**: Shows last 3 messages with reply status
+- **Smart guidance**: Suggests whether to broadcast or direct message based on discussion
+- **Use case**: Responding to team discussions with full context
+
+### Using Prompts vs Tools
+
+**Prompts** (Recommended for most workflows):
+- Guided experiences with context-awareness
+- Smart suggestions, validation, and error handling
+- Real-time project state injection
+- Best for: Onboarding, common patterns, quick actions
+
+**Tools** (Advanced/Custom workflows):
+- Direct control with precise parameters
+- No context injection - you specify everything
+- Required for: Custom logic, game mechanics, specialized protocols
+- Best for: Demos, complex choreography, fine-grained control
+
+For detailed prompt documentation with examples, see [PROMPTS.md](PROMPTS.md).
 
 ## Installation
 
@@ -442,6 +516,98 @@ Update your online status. Call periodically to show you're active.
   online: true                        // Optional (defaults to true)
 }
 ```
+
+#### `status`
+Get status across all projects. Supports two modes:
+- **Agent-specific**: `status(agent_name="frontend")` - shows projects for that agent name only
+- **Client-wide**: `status(client_id="...")` - shows ALL projects this Claude instance has joined
+
+```typescript
+// First time - get new client_id
+{}  // Returns: {client_id: "abc-123", projects: []}
+
+// Check all projects for this client
+{
+  client_id: "abc-123"
+}
+
+// Or check specific agent name
+{
+  agent_name: "frontend"
+}
+```
+
+## Session Persistence
+
+Brainstorm automatically remembers which projects you've joined across sessions, allowing seamless collaboration resumption.
+
+### How It Works
+
+Each Claude Code instance gets a persistent **client_id** (UUID) that tracks all project memberships regardless of agent name. This solves the problem of joining multiple projects with different agent names:
+
+- Join project "api-redesign" as "backend-dev"
+- Join project "frontend-work" as "ui-specialist"
+- Join project "testing" as "qa-lead"
+
+All three memberships are remembered under your client_id.
+
+### Automatic Workflow
+
+**First Time:**
+```typescript
+// Call status with no parameters to get your client_id
+status()
+→ { client_id: "550e8400-e29b-41d4-a716-446655440000", projects: [] }
+
+// Join a project - client_id auto-generated if not provided
+join_project({
+  project_id: "api-redesign",
+  agent_name: "backend-dev",
+  client_id: "550e8400-..."  // Optional but recommended
+})
+→ { success: true, client_id: "550e8400-...", client_id_is_new: false }
+```
+
+**Future Sessions:**
+```typescript
+// Check all your projects
+status({ client_id: "550e8400-..." })
+→ {
+    client_id: "550e8400-...",
+    projects: [
+      {
+        project_id: "api-redesign",
+        agent_name: "backend-dev",
+        project_name: "API Redesign",
+        unread_messages: 2
+      },
+      {
+        project_id: "frontend-work",
+        agent_name: "ui-specialist",
+        project_name: "Frontend Refresh",
+        unread_messages: 0
+      }
+    ]
+  }
+```
+
+### Storage Structure
+
+Client memberships are stored in:
+```
+~/.brainstorm/
+  clients/
+    <client-id>/
+      identity.json        # {client_id, created_at, last_seen}
+      memberships.json     # [{project_id, agent_name, project_name, joined_at}]
+```
+
+### Key Features
+
+- **Zero Configuration**: Client IDs are automatically generated on first use
+- **Server-Side Storage**: No client-side state management required
+- **Multi-Project Support**: One client can join many projects with different names
+- **Automatic Cleanup**: Deleted projects are automatically removed from all client memberships
 
 ## Usage Examples
 

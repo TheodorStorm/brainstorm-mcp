@@ -1,5 +1,32 @@
 /**
- * MCP server for project-centric agent cooperation
+ * MCP Server Implementation for Multi-Agent Collaboration
+ *
+ * This module implements the Model Context Protocol (MCP) server that enables
+ * multiple Claude Code instances to communicate and collaborate within shared projects.
+ *
+ * **Architecture:**
+ * - Implements 15 MCP tools for agent cooperation
+ * - Provides 8 context-aware prompts for guided workflows
+ * - Uses stdio transport for MCP communication
+ * - Delegates all persistence to {@link FileSystemStorage}
+ *
+ * **Key Features:**
+ * - Project management (create, join, delete, list)
+ * - Message passing (direct and broadcast)
+ * - Resource sharing with permissions
+ * - Session persistence via working directory mapping
+ * - Long-polling support for real-time collaboration
+ * - DoS protection for concurrent requests
+ *
+ * **Security:**
+ * - Path validation (working_directory must be absolute and normalized)
+ * - Error sanitization (system errors hidden, user errors preserved)
+ * - Rate limiting (max 100 concurrent long-polls per agent/resource)
+ * - Audit logging for all operations
+ *
+ * @module server
+ * @see {@link AgentCoopServer} for main server class
+ * @see {@link FileSystemStorage} for persistence layer
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -7,11 +34,13 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
   Tool
 } from '@modelcontextprotocol/sdk/types.js';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import { readFileSync, existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, isAbsolute, normalize } from 'path';
 import { fileURLToPath } from 'url';
 import { FileSystemStorage } from './storage.js';
 import { isUserError } from './errors.js';
@@ -22,7 +51,58 @@ import type {
   ResourceManifest
 } from './types.js';
 
-// Load version info with fallback to package.json
+/**
+ * Generate deterministic client ID from working directory path.
+ *
+ * This function creates a stable client identity based on the working directory,
+ * enabling automatic session persistence. The same directory always produces the
+ * same client_id, allowing agents to reclaim their names across restarts.
+ *
+ * **Algorithm:**
+ * 1. SHA-256 hash of the working directory path
+ * 2. Format first 32 hex characters as UUID format
+ *
+ * **Use Case:**
+ * - `/Users/alice/projects/frontend` → same client_id every time
+ * - Different directories → different client identities
+ * - Enables smart name reclaiming (see {@link ProjectMember.client_id})
+ *
+ * **Complexity:** O(n) where n is the length of the working directory string
+ *
+ * @param workingDirectory - Absolute path to the working directory
+ * @returns UUID-formatted client identifier (derived from SHA-256 hash)
+ *
+ * @example
+ * const clientId = generateDeterministicClientId('/Users/alice/projects/frontend');
+ * // Returns: "a3f2b8c1-d4e5-f6g7-h8i9-j0k1l2m3n4o5"
+ * // Same directory always returns the same ID
+ */
+function generateDeterministicClientId(workingDirectory: string): string {
+  const hash = createHash('sha256').update(workingDirectory).digest('hex');
+  // Format as UUID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+  return `${hash.substring(0, 8)}-${hash.substring(8, 12)}-${hash.substring(12, 16)}-${hash.substring(16, 20)}-${hash.substring(20, 32)}`;
+}
+
+/**
+ * Load version information with graceful fallback strategy.
+ *
+ * This function attempts to load version info from multiple sources in order of preference:
+ * 1. Generated `version.json` (created during build by `scripts/generate-version.js`)
+ * 2. `package.json` (always available in source)
+ * 3. Hardcoded fallback values (last resort)
+ *
+ * **Build Process:**
+ * - `npm run build` generates `dist/src/version.json` from `package.json`
+ * - This ensures version consistency without runtime package.json access
+ *
+ * **Complexity:** O(1) - reads at most 3 files sequentially
+ *
+ * @returns Version metadata object containing version, name, and optional description
+ *
+ * @example
+ * const info = loadVersionInfo();
+ * // { version: "0.8.0", name: "brainstorm", description: "..." }
+ */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -64,12 +144,117 @@ function loadVersionInfo(): { version: string; name: string; description?: strin
 
 const versionInfo = loadVersionInfo();
 
+/**
+ * MCP Server for Multi-Agent Collaboration
+ *
+ * This class implements the Model Context Protocol (MCP) server that enables multiple
+ * Claude Code instances to communicate and collaborate through shared projects.
+ *
+ * **Architecture:**
+ * - Uses MCP SDK's {@link Server} for protocol handling
+ * - Delegates all persistence to {@link FileSystemStorage}
+ * - Communicates via stdio transport (stdin/stdout)
+ * - Implements 15 tools and 8 context-aware prompts
+ *
+ * **Key Components:**
+ * - **Tool Handlers**: Implement MCP tool operations (create_project, send_message, etc.)
+ * - **Prompt Handlers**: Provide context-aware guided workflows
+ * - **Error Handling**: Sanitizes system errors, preserves user errors
+ * - **Long-Polling**: Supports real-time collaboration with DoS protection
+ *
+ * **Security Features:**
+ * - Rate limiting: Max 100 concurrent long-polls per agent/resource
+ * - Path validation: working_directory must be absolute and normalized
+ * - Error sanitization: System errors hidden, user errors with structured data
+ * - Audit logging: All operations logged for accountability
+ *
+ * **Session Persistence (v0.8.0+):**
+ * - Client identity derived from working directory (deterministic client_id)
+ * - Same directory = same identity = can reclaim agent names
+ * - Membership tracking across restarts
+ *
+ * @example
+ * // Create and run the server
+ * const server = new AgentCoopServer('/Users/alice/.brainstorm');
+ * await server.run();
+ * // Server now listens on stdin/stdout for MCP protocol messages
+ */
 export class AgentCoopServer {
+  /** MCP SDK server instance handling protocol communication */
   private server: Server;
+
+  /** File system storage layer for all persistence operations */
   private storage: FileSystemStorage;
+
+  /** Active long-polling connection tracking for DoS protection (key: operation ID, value: count) */
   private activeLongPolls = new Map<string, number>();
+
+  /** Maximum concurrent long-polling connections per agent/resource (DoS protection) */
   private readonly MAX_CONCURRENT_POLLS = 100;
 
+  // MCP Prompts for guided multi-agent workflows
+  private readonly PROMPTS = {
+    'create': {
+      name: 'create',
+      description: 'Create a new multi-agent collaboration project. I\'ll ask you for the details conversationally.',
+      arguments: []
+    },
+    'join': {
+      name: 'join',
+      description: 'Join an existing collaboration project. I\'ll show you available projects and help you choose.',
+      arguments: []
+    },
+    'broadcast': {
+      name: 'broadcast',
+      description: 'Send a message to all agents in a project. I\'ll help you compose and send it.',
+      arguments: []
+    },
+    'review': {
+      name: 'review',
+      description: 'Catch up on project activity. I\'ll show you members, messages, and resources.',
+      arguments: []
+    },
+    'share': {
+      name: 'share',
+      description: 'Share a resource or document with the project team. I\'ll guide you through the process.',
+      arguments: []
+    },
+    'discuss': {
+      name: 'discuss',
+      description: 'Reply to ongoing project discussions. I\'ll show you recent context and help you respond.',
+      arguments: []
+    },
+    'list': {
+      name: 'list',
+      description: 'List all available projects. Perfect for discovery - no arguments needed!',
+      arguments: []
+    },
+    'status': {
+      name: 'status',
+      description: 'Show your Brainstorm project memberships for this working directory.',
+      arguments: []
+    }
+  };
+
+  /**
+   * Create a new Brainstorm MCP server instance.
+   *
+   * Initializes the server with file system storage at the specified path and
+   * sets up all MCP tool and prompt handlers.
+   *
+   * **Storage Initialization:**
+   * - Creates storage directory structure if it doesn't exist
+   * - Loads or creates system configuration
+   * - No network connections or external dependencies
+   *
+   * **Complexity:** O(1) - lightweight initialization, actual storage setup happens in `run()`
+   *
+   * @param storagePath - Absolute path to storage root directory (e.g., ~/.brainstorm)
+   *
+   * @example
+   * const server = new AgentCoopServer('/Users/alice/.brainstorm');
+   * await server.run(); // Start listening on stdio
+   */
   constructor(storagePath: string) {
     this.storage = new FileSystemStorage(storagePath);
 
@@ -80,7 +265,8 @@ export class AgentCoopServer {
       },
       {
         capabilities: {
-          tools: {}
+          tools: {},
+          prompts: {}
         }
       }
     );
@@ -89,8 +275,35 @@ export class AgentCoopServer {
   }
 
   /**
-   * Centralized error handler that preserves UserError metadata
-   * and sanitizes system errors
+   * Centralized error handler that preserves UserError metadata and sanitizes system errors.
+   *
+   * This method implements a security-conscious error handling strategy:
+   * - **UserError**: Preserve structured error data (safe for clients)
+   * - **System Error**: Sanitize to "Internal server error" (prevent information leakage)
+   *
+   * **Error Flow:**
+   * 1. Log full error server-side for debugging
+   * 2. Check if error is UserError (ValidationError, NotFoundError, etc.)
+   * 3. If UserError: return structured JSON with message, code, details
+   * 4. If system error: return sanitized generic error
+   *
+   * **Security Rationale:**
+   * - UserError instances are designed to be safe (no sensitive data)
+   * - System errors might expose file paths, stack traces, or internal state
+   * - Prevents information disclosure vulnerabilities
+   *
+   * **Complexity:** O(1) - simple type check and JSON serialization
+   *
+   * @param error - Error object (UserError or system Error)
+   * @param toolName - Name of the tool that threw the error (for logging)
+   * @returns MCP error response with isError: true flag
+   *
+   * @example
+   * try {
+   *   await this.storage.getResource(projectId, resourceId, agentName);
+   * } catch (error) {
+   *   return this.formatError(error, 'get_resource');
+   * }
    */
   private formatError(error: unknown, toolName: string) {
     // Log detailed error server-side for debugging
@@ -160,7 +373,7 @@ export class AgentCoopServer {
         },
         {
           name: 'join_project',
-          description: 'Join a project with a friendly agent name. This is how agents register themselves within a project.',
+          description: 'Join a project with a friendly agent name. This is how agents register themselves within a project. Automatically tracks membership by your working directory - no manual storage needed!',
           inputSchema: {
             type: 'object',
             properties: {
@@ -172,6 +385,10 @@ export class AgentCoopServer {
                 type: 'string',
                 description: 'Your friendly name within this project (e.g., "frontend", "backend")'
               },
+              working_directory: {
+                type: 'string',
+                description: 'Absolute path to your project directory - provides automatic session persistence'
+              },
               capabilities: {
                 type: 'array',
                 items: { type: 'string' },
@@ -182,7 +399,7 @@ export class AgentCoopServer {
                 description: 'Key-value labels for this agent'
               }
             },
-            required: ['project_id', 'agent_name']
+            required: ['project_id', 'agent_name', 'working_directory']
           }
         },
         {
@@ -219,7 +436,7 @@ export class AgentCoopServer {
         },
         {
           name: 'send_message',
-          description: 'Send a message to another agent in the project or broadcast to all members. Set reply_expected=true if you will wait for a response, false if not.',
+          description: 'Send a message to another agent in the project or broadcast to all members. CRITICAL: reply_expected is a commitment - set true ONLY if you will immediately call receive_messages with wait=true to wait for responses. Set false for informational messages.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -241,7 +458,7 @@ export class AgentCoopServer {
               },
               reply_expected: {
                 type: 'boolean',
-                description: 'True if you will call receive_messages to wait for a reply, false otherwise'
+                description: 'CRITICAL: Set true if your message asks a question or requests action AND you will immediately call receive_messages with wait=true to wait for replies. Set false for informational messages. This is a binding commitment - true means you WILL wait, false means you won\'t.'
               },
               payload: {
                 type: 'object',
@@ -492,16 +709,16 @@ export class AgentCoopServer {
         },
         {
           name: 'status',
-          description: 'Get agent status across all projects. Shows which projects the agent is a member of and whether there are unread messages in each project.',
+          description: 'Get your Brainstorm project status. Shows project memberships for your working directory with seamless session persistence - same directory always shows the same projects.',
           inputSchema: {
             type: 'object',
             properties: {
-              agent_name: {
+              working_directory: {
                 type: 'string',
-                description: 'Agent name to check status for'
+                description: 'Absolute path to your project directory - shows all projects joined from this directory'
               }
             },
-            required: ['agent_name']
+            required: ['working_directory']
           }
         }
       ];
@@ -558,10 +775,51 @@ export class AgentCoopServer {
           }
 
           case 'join_project': {
+            const projectId = args.project_id as string;
+            const agentName = args.agent_name as string;
+            const workingDirectory = args.working_directory as string;
+
+            // Validate working_directory is absolute and normalized
+            if (!isAbsolute(workingDirectory)) {
+              return {
+                content: [{
+                  type: 'text',
+                  text: JSON.stringify({
+                    error: 'working_directory must be an absolute path',
+                    code: 'INVALID_WORKING_DIRECTORY',
+                    details: { working_directory: workingDirectory }
+                  })
+                }],
+                isError: true
+              };
+            }
+
+            const normalizedPath = normalize(workingDirectory);
+            if (normalizedPath !== workingDirectory) {
+              return {
+                content: [{
+                  type: 'text',
+                  text: JSON.stringify({
+                    error: 'working_directory must be normalized (no .. or . segments)',
+                    code: 'INVALID_WORKING_DIRECTORY',
+                    details: {
+                      working_directory: workingDirectory,
+                      normalized: normalizedPath
+                    }
+                  })
+                }],
+                isError: true
+              };
+            }
+
+            // Generate deterministic client_id from working directory
+            const clientId = generateDeterministicClientId(workingDirectory);
+
             const member: ProjectMember = {
-              project_id: args.project_id as string,
-              agent_name: args.agent_name as string,
+              project_id: projectId,
+              agent_name: agentName,
               agent_id: randomUUID(),
+              client_id: clientId, // Include client_id for name reclaiming
               capabilities: (args.capabilities as string[]) || [],
               labels: (args.labels as Record<string, string>) || {},
               joined_at: new Date().toISOString(),
@@ -571,12 +829,20 @@ export class AgentCoopServer {
 
             await this.storage.joinProject(member);
 
+            // Get project metadata for the membership record
+            const projectMetadata = await this.storage.getProjectMetadata(projectId);
+            const projectName = projectMetadata?.name || projectId;
+
+            // Store client identity and record membership
+            await this.storage.storeClientIdentity(clientId);
+            await this.storage.recordClientMembership(clientId, projectId, agentName, projectName);
+
             await this.storage.auditLog({
               timestamp: new Date().toISOString(),
               actor: member.agent_name,
               action: 'join_project',
               target: member.project_id,
-              details: { agent_id: member.agent_id }
+              details: { agent_id: member.agent_id, client_id: clientId, working_directory: workingDirectory }
             });
 
             return {
@@ -584,9 +850,10 @@ export class AgentCoopServer {
                 type: 'text',
                 text: JSON.stringify({
                   success: true,
+                  working_directory: workingDirectory,
                   agent_name: member.agent_name,
                   agent_id: member.agent_id,
-                  message: 'Joined project successfully. You can now send and receive messages.'
+                  message: 'Joined project successfully. Your membership is automatically tracked by your working directory.'
                 }, null, 2)
               }]
             };
@@ -1133,6 +1400,9 @@ export class AgentCoopServer {
 
             await this.storage.deleteProject(projectId, agentName);
 
+            // Cleanup: remove this project from all client membership files
+            await this.storage.removeProjectFromAllClients(projectId);
+
             await this.storage.auditLog({
               timestamp: new Date().toISOString(),
               actor: agentName,
@@ -1145,7 +1415,7 @@ export class AgentCoopServer {
                 type: 'text',
                 text: JSON.stringify({
                   success: true,
-                  message: 'Project deleted successfully'
+                  message: 'Project deleted successfully. All client memberships have been removed.'
                 }, null, 2)
               }]
             };
@@ -1161,30 +1431,68 @@ export class AgentCoopServer {
           }
 
           case 'status': {
-            const agentName = args.agent_name as string;
+            const workingDirectory = args.working_directory as string;
 
-            // Get all projects
-            const allProjects = await this.storage.listProjects();
+            // Validate working_directory is absolute and normalized
+            if (!isAbsolute(workingDirectory)) {
+              return {
+                content: [{
+                  type: 'text',
+                  text: JSON.stringify({
+                    error: 'working_directory must be an absolute path',
+                    code: 'INVALID_WORKING_DIRECTORY',
+                    details: { working_directory: workingDirectory }
+                  })
+                }],
+                isError: true
+              };
+            }
+
+            const normalizedPath = normalize(workingDirectory);
+            if (normalizedPath !== workingDirectory) {
+              return {
+                content: [{
+                  type: 'text',
+                  text: JSON.stringify({
+                    error: 'working_directory must be normalized (no .. or . segments)',
+                    code: 'INVALID_WORKING_DIRECTORY',
+                    details: {
+                      working_directory: workingDirectory,
+                      normalized: normalizedPath
+                    }
+                  })
+                }],
+                isError: true
+              };
+            }
+
+            // Generate deterministic client_id from working directory
+            const clientId = generateDeterministicClientId(workingDirectory);
+
+            // Store/update client identity
+            await this.storage.storeClientIdentity(clientId);
+
+            // Get memberships for this client
+            const memberships = await this.storage.getClientMemberships(clientId);
             const projectStatuses = [];
 
-            // Check each project for membership and messages
-            for (const project of allProjects) {
-              const member = await this.storage.getProjectMember(project.project_id, agentName);
-
-              if (member) {
-                // Agent is a member of this project
-                const messages = await this.storage.getAgentInbox(project.project_id, agentName);
+            for (const membership of memberships) {
+              try {
+                const messages = await this.storage.getAgentInbox(membership.project_id, membership.agent_name);
+                const member = await this.storage.getProjectMember(membership.project_id, membership.agent_name);
 
                 projectStatuses.push({
-                  project_id: project.project_id,
-                  project_name: project.name,
-                  description: project.description,
-                  joined_at: member.joined_at,
-                  last_seen: member.last_seen,
-                  online: member.online,
+                  project_id: membership.project_id,
+                  project_name: membership.project_name,
+                  agent_name: membership.agent_name,
+                  joined_at: membership.joined_at,
+                  last_seen: member?.last_seen || membership.joined_at,
+                  online: member?.online || false,
                   unread_messages: messages.length,
                   has_unread: messages.length > 0
                 });
+              } catch {
+                // Project might have been deleted - skip it
               }
             }
 
@@ -1192,7 +1500,7 @@ export class AgentCoopServer {
               content: [{
                 type: 'text',
                 text: JSON.stringify({
-                  agent_name: agentName,
+                  working_directory: workingDirectory,
                   projects: projectStatuses,
                   total_projects: projectStatuses.length,
                   total_unread_messages: projectStatuses.reduce((sum, p) => sum + p.unread_messages, 0)
@@ -1214,8 +1522,393 @@ export class AgentCoopServer {
         return this.formatError(error, name);
       }
     });
+
+    // List available prompts
+    this.server.setRequestHandler(ListPromptsRequestSchema, async () => {
+      return {
+        prompts: Object.values(this.PROMPTS)
+      };
+    });
+
+    // Handle prompt requests with contextual intelligence
+    this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+      const promptName = request.params.name;
+      const args = request.params.arguments || {};
+
+      const prompt = this.PROMPTS[promptName as keyof typeof this.PROMPTS];
+      if (!prompt) {
+        throw new Error(`Prompt not found: ${promptName}`);
+      }
+
+      try {
+        switch (promptName) {
+          case 'create': {
+            // Get context: check current status and existing projects
+            const existingProjects = await this.storage.listProjects();
+
+            return {
+              messages: [
+                {
+                  role: 'user',
+                  content: {
+                    type: 'text',
+                    text: `I want to create a new multi-agent collaboration project.
+
+**First, let me check your current status:**
+1. Read your working directory from \`<env>\` (look for "Working directory:")
+2. Use the \`status\` tool with working_directory=[value from env]
+
+${existingProjects.length > 0 ? `\n**Existing projects** (${existingProjects.length}):\n${existingProjects.map(p => `- **${p.project_id}**: ${p.name}`).join('\n')}\n` : '**Note**: No projects exist yet - you\'ll be creating the first one!\n'}
+**Then, please ask me:**
+- What should the project be called?
+- What's the goal or purpose?
+- What role will you play? (e.g., "coordinator", "lead", "architect")
+
+**Once I provide this info, you'll:**
+1. Generate a project_id from the name (lowercase, alphanumeric + dashes)
+2. Check if it conflicts with existing projects
+3. Create it with \`create_project\`
+4. Join it automatically with \`join_project\``
+                  }
+                }
+              ]
+            };
+          }
+
+          case 'join': {
+            // List available projects for selection
+            const projects = await this.storage.listProjects();
+
+            if (projects.length === 0) {
+              return {
+                messages: [
+                  {
+                    role: 'user',
+                    content: {
+                      type: 'text',
+                      text: `❌ **No Projects Available**
+
+There are no collaboration projects to join yet.
+
+**Next steps**:
+- Use the **create** prompt to start a new project
+- Ask other agents to create a project first`
+                    }
+                  }
+                ]
+              };
+            }
+
+            const projectList = projects.map(p => {
+              return `### 📁 ${p.name} (\`${p.project_id}\`)
+**Description**: ${p.description || '(No description)'}
+**Created**: ${new Date(p.created_at).toLocaleString()}`;
+            }).join('\n\n');
+
+            return {
+              messages: [
+                {
+                  role: 'user',
+                  content: {
+                    type: 'text',
+                    text: `I want to join a collaboration project.
+
+**First, let me check your current status:**
+1. Read your working directory from \`<env>\` (look for "Working directory:")
+2. Use the \`status\` tool to see which projects you're already in
+
+**Available Projects** (${projects.length}):
+
+${projectList}
+
+**Then, please ask me:**
+- Which project would you like to join? (provide the project_id)
+- What role will you play? (e.g., "frontend", "backend", "reviewer")
+
+**Once I provide this info, you'll:**
+1. Get detailed project info with \`get_project_info\` to see current members
+2. Suggest available roles based on existing members
+3. Join with \`join_project\`
+4. Check for unread messages with \`receive_messages\``
+                  }
+                }
+              ]
+            };
+          }
+
+          case 'broadcast': {
+            // Check status to determine which project to broadcast to
+            return {
+              messages: [
+                {
+                  role: 'user',
+                  content: {
+                    type: 'text',
+                    text: `I want to broadcast a message to all members of a project.
+
+**First, let me check your current status:**
+1. Read your working directory from \`<env>\` (look for "Working directory:")
+2. Use the \`status\` tool to see your active projects
+
+**Then:**
+- If you're in exactly 1 project → I'll ask for the message and broadcast to that project
+- If you're in multiple projects → I'll ask which project and what message
+- If you're in 0 projects → I'll guide you to join or create one first
+
+**Once we determine the project, please tell me:**
+- What message do you want to broadcast?
+
+**I'll then:**
+1. Get the project members list
+2. Analyze if your message expects responses (questions, requests, assignments)
+3. Send with \`send_message\` using broadcast=true
+
+**CRITICAL - reply_expected Usage:**
+- Set \`reply_expected: true\` if your broadcast asks a question or requests action from team members
+- If you set it to \`true\`, you MUST immediately call \`receive_messages\` with \`wait=true\` to wait for replies
+- Set \`reply_expected: false\` if your broadcast is informational (announcements, updates, status reports)
+- This is a commitment: \`true\` means you will wait for responses, \`false\` means you won't`
+                  }
+                }
+              ]
+            };
+          }
+
+          case 'review': {
+            // Check status first to see which project to review
+            return {
+              messages: [
+                {
+                  role: 'user',
+                  content: {
+                    type: 'text',
+                    text: `I want to review project activity.
+
+**First, let me check your current status:**
+1. Read your working directory from \`<env>\` (look for "Working directory:")
+2. Use the \`status\` tool to see your projects and unread message counts
+
+**Then:**
+- If you're in exactly 1 project → I'll review that one automatically
+- If you're in multiple projects → I'll ask which one to review
+- If you're in 0 projects → I'll suggest joining or creating a project
+
+**The review will show:**
+- 📋 Project overview (name, description, created date)
+- 👥 Team members (who's online, when they joined)
+- 📬 Your unread messages (recent messages with previews)
+- 📦 Available resources (shared documents and data)
+
+**I'll use these tools:**
+- \`get_project_info\` for project details and members
+- \`receive_messages\` for your inbox
+- \`list_resources\` for shared resources`
+                  }
+                }
+              ]
+            };
+          }
+
+          case 'share': {
+            // Check status to determine which project to share with
+            return {
+              messages: [
+                {
+                  role: 'user',
+                  content: {
+                    type: 'text',
+                    text: `I want to share a resource with the project team.
+
+**First, let me check your current status:**
+1. Read your working directory from \`<env>\` (look for "Working directory:")
+2. Use the \`status\` tool to see your projects
+
+**Then:**
+- If you're in exactly 1 project → I'll ask for the resource details
+- If you're in multiple projects → I'll ask which project first
+- If you're in 0 projects → I'll guide you to join or create one
+
+**Please tell me:**
+- What's the resource title?
+- What does it contain? (brief description)
+- Do you have a file path to share, or will you provide inline content?
+
+**I'll then:**
+1. Generate a resource_id from the title
+2. Store it with \`store_resource\` (using source_path for files >50KB, content for smaller data)
+3. Set permissions (read: everyone, write: you)
+4. Broadcast a notification to the team with \`send_message\`
+
+**CRITICAL - reply_expected Usage:**
+When broadcasting the notification about the shared resource:
+- Set \`reply_expected: true\` if you want feedback, review, or acknowledgment from team members
+- If you set it to \`true\`, you MUST immediately call \`receive_messages\` with \`wait=true\` to wait for responses
+- Set \`reply_expected: false\` if this is just an FYI notification (most common for resource sharing)
+- This is a commitment: \`true\` means you will wait for responses, \`false\` means you won't`
+                  }
+                }
+              ]
+            };
+          }
+
+          case 'discuss': {
+            // Check status to see ongoing discussions
+            return {
+              messages: [
+                {
+                  role: 'user',
+                  content: {
+                    type: 'text',
+                    text: `I want to contribute to an ongoing project discussion.
+
+**First, let me check your current status:**
+1. Read your working directory from \`<env>\` (look for "Working directory:")
+2. Use the \`status\` tool to see your projects and unread messages
+
+**Then:**
+- If you're in exactly 1 project → I'll show recent messages and ask for your response
+- If you're in multiple projects → I'll ask which project first
+- If you have unread messages → I'll show them for context
+- If you're in 0 projects → I'll guide you to join one
+
+**Please tell me:**
+- What do you want to say or contribute?
+
+**I'll then:**
+1. Get recent messages with \`receive_messages\` for context
+2. Determine if this is a reply to someone specific or a general contribution
+3. Analyze if your message expects a response (questions, requests, assignments)
+4. Send your response with \`send_message\` (direct or broadcast as appropriate)
+
+**CRITICAL - reply_expected Usage:**
+- Set \`reply_expected: true\` if your message asks a question or requests action
+- If you set it to \`true\`, you MUST immediately call \`receive_messages\` with \`wait=true\` to wait for the reply
+- Set \`reply_expected: false\` if your message is informational or doesn't need a response
+- This is a commitment: \`true\` means you will wait, \`false\` means you won't`
+                  }
+                }
+              ]
+            };
+          }
+
+          case 'list': {
+            // Get all projects
+            const projects = await this.storage.listProjects();
+
+            if (projects.length === 0) {
+              return {
+                messages: [
+                  {
+                    role: 'user',
+                    content: {
+                      type: 'text',
+                      text: `📋 **No Projects Yet**
+
+No collaboration projects have been created yet. Be the first!
+
+**To get started**:
+- Use the **"create"** prompt to start a new project
+- Example: Create a project called "API Redesign" with goal "Coordinate frontend and backend"`
+                    }
+                  }
+                ]
+              };
+            }
+
+            const projectList = projects.map(p => {
+              return `### 📁 ${p.name} (\`${p.project_id}\`)
+**Description**: ${p.description || '(No description)'}
+**Created**: ${new Date(p.created_at).toLocaleString()}`;
+            }).join('\n\n');
+
+            return {
+              messages: [
+                {
+                  role: 'user',
+                  content: {
+                    type: 'text',
+                    text: `📋 **Available Projects** (${projects.length})
+
+${projectList}
+
+**Next steps**:
+- Use **"join"** prompt with a project_id to join one of these projects
+- Use **"create"** prompt to start a new project
+- Use **"status"** prompt to see which projects you're already in`
+                  }
+                }
+              ]
+            };
+          }
+
+          case 'status': {
+            // Instruct Claude to get working_directory from <env> and use the status tool
+            return {
+              messages: [
+                {
+                  role: 'user',
+                  content: {
+                    type: 'text',
+                    text: `I want to see my Brainstorm project status for this working directory.
+
+**Please**:
+1. Read your working directory from the \`<env>\` context (look for "Working directory:")
+2. Use the \`status\` tool with the working_directory parameter set to that value
+
+The tool will show you all projects you've joined from this directory, including unread message counts.`
+                  }
+                }
+              ]
+            };
+          }
+
+          default:
+            throw new Error(`Prompt implementation not found: ${promptName}`);
+        }
+      } catch (error: unknown) {
+        // If error is from storage/validation, provide helpful context
+        if (error instanceof Error) {
+          return {
+            messages: [
+              {
+                role: 'user',
+                content: {
+                  type: 'text',
+                  text: `❌ **Error**: ${error.message}\n\nPlease check your arguments and try again.`
+                }
+              }
+            ]
+          };
+        }
+        throw error;
+      }
+    });
   }
 
+  /**
+   * Set up process signal handlers for graceful shutdown and error handling.
+   *
+   * This method registers handlers for various process events to ensure the server
+   * exits cleanly when Claude Code disconnects or the process is terminated.
+   *
+   * **Handlers Registered:**
+   * - `stdin.end`: Claude Code disconnected (graceful exit)
+   * - `stdin.close`: stdin stream closed (graceful exit)
+   * - `SIGTERM`: Termination signal (graceful shutdown)
+   * - `SIGINT`: Interrupt signal / Ctrl+C (graceful shutdown)
+   * - `uncaughtException`: Unhandled synchronous errors (exit with error code)
+   * - `unhandledRejection`: Unhandled promise rejections (exit with error code)
+   *
+   * **Rationale:**
+   * - MCP servers communicate via stdin/stdout
+   * - When Claude Code exits, stdin closes and server should exit too
+   * - Prevents orphaned server processes
+   * - Ensures proper cleanup on termination
+   *
+   * **Complexity:** O(1) - event listener registration
+   *
+   * @private
+   */
   private setupProcessHandlers(): void {
     // Detect when Claude disconnects (stdin closes)
     process.stdin.on('end', () => {
@@ -1251,6 +1944,42 @@ export class AgentCoopServer {
     });
   }
 
+  /**
+   * Initialize storage and start the MCP server.
+   *
+   * This method performs the startup sequence:
+   * 1. Initialize file system storage (create directories, load config)
+   * 2. Connect MCP server to stdio transport
+   * 3. Set up process handlers for graceful shutdown
+   * 4. Log startup message to stderr
+   *
+   * **Transport:**
+   * - Uses stdio transport (stdin for input, stdout for output)
+   * - stderr used for logging (doesn't interfere with MCP protocol)
+   *
+   * **Startup Flow:**
+   * ```
+   * User runs: node dist/src/index.js
+   * → run() called
+   * → Storage initialized (~/.brainstorm/)
+   * → MCP server connects to stdin/stdout
+   * → Process handlers registered
+   * → Server ready for MCP protocol messages
+   * ```
+   *
+   * **Complexity:**
+   * - Storage initialization: O(1) - creates directories if needed
+   * - Server connection: O(1) - lightweight protocol setup
+   * - Overall: O(1)
+   *
+   * @async
+   * @throws {Error} If storage initialization fails or MCP connection fails
+   *
+   * @example
+   * const server = new AgentCoopServer('/Users/alice/.brainstorm');
+   * await server.run();
+   * // Server now running, listening for MCP messages on stdin
+   */
   async run(): Promise<void> {
     await this.storage.initialize();
 
