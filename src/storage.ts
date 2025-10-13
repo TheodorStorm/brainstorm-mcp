@@ -1103,4 +1103,57 @@ export class FileSystemStorage {
       return [];
     }
   }
+
+  async deleteResource(projectId: string, resourceId: string, agentName: string): Promise<void> {
+    this.assertSafeId(projectId, 'project_id');
+    this.assertSafeId(resourceId, 'resource_id');
+    this.assertSafeId(agentName, 'agent_name');
+
+    // Get the manifest to check creator
+    const storedManifest = await this.getResourceManifestOnly(projectId, resourceId);
+    if (!storedManifest) {
+      throw new NotFoundError(
+        'Resource not found',
+        'RESOURCE_NOT_FOUND',
+        { project_id: projectId, resource_id: resourceId }
+      );
+    }
+
+    // Only the creator can delete the resource
+    // For legacy resources without creator_agent, fall back to write permission check
+    if (!storedManifest.creator_agent) {
+      // Legacy resource - check write permissions
+      const hasWritePermission =
+        storedManifest.permissions?.write?.includes('*') ||
+        storedManifest.permissions?.write?.includes(agentName);
+
+      if (!hasWritePermission) {
+        throw new PermissionError(
+          'Access denied: only agents with write permission can delete legacy resources',
+          'DELETE_PERMISSION_DENIED',
+          { resource_id: resourceId, requester: agentName, legacy: true }
+        );
+      }
+    } else if (storedManifest.creator_agent !== agentName) {
+      // Modern resource - only creator can delete
+      throw new PermissionError(
+        'Access denied: only the resource creator can delete it',
+        'DELETE_PERMISSION_DENIED',
+        { resource_id: resourceId, creator: storedManifest.creator_agent, requester: agentName }
+      );
+    }
+
+    // Delete the resource directory
+    const resourceDir = path.join(this.root, 'projects', projectId, 'resources', resourceId);
+
+    try {
+      await fs.rm(resourceDir, { recursive: true, force: true });
+    } catch (err: any) {
+      if (err.code === 'ENOENT') {
+        // Already deleted, that's okay
+        return;
+      }
+      throw err;
+    }
+  }
 }

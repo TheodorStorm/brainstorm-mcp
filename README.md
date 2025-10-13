@@ -635,7 +635,7 @@ get_resource({
 
 1. **MCP Protocol Layer** (`src/server.ts`)
    - Implements MCP server over stdio transport
-   - Exposes 12 tools for project cooperation
+   - Exposes 15 tools for project cooperation
    - Handles request validation and error responses
 
 2. **Storage Abstraction Layer** (`src/storage.ts`)
