@@ -421,6 +421,28 @@ export class AgentCoopServer {
           }
         },
         {
+          name: 'delete_resource',
+          description: 'Delete a resource from the project. Only the resource creator can delete it.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              project_id: {
+                type: 'string',
+                description: 'Project containing the resource'
+              },
+              resource_id: {
+                type: 'string',
+                description: 'Resource ID to delete'
+              },
+              agent_name: {
+                type: 'string',
+                description: 'Your agent name (must be the resource creator)'
+              }
+            },
+            required: ['project_id', 'resource_id', 'agent_name']
+          }
+        },
+        {
           name: 'heartbeat',
           description: 'Update your online status. Call periodically to show you are active.',
           inputSchema: {
@@ -1055,6 +1077,32 @@ export class AgentCoopServer {
                 text: JSON.stringify({
                   resources,
                   count: resources.length
+                }, null, 2)
+              }]
+            };
+          }
+
+          case 'delete_resource': {
+            const projectId = args.project_id as string;
+            const resourceId = args.resource_id as string;
+            const agentName = args.agent_name as string;
+
+            await this.storage.deleteResource(projectId, resourceId, agentName);
+
+            await this.storage.auditLog({
+              timestamp: new Date().toISOString(),
+              actor: agentName,
+              action: 'delete_resource',
+              target: resourceId,
+              details: { project_id: projectId }
+            });
+
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  success: true,
+                  message: 'Resource deleted successfully'
                 }, null, 2)
               }]
             };

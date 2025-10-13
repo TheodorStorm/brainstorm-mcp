@@ -627,6 +627,356 @@ describe('Security: Project Deletion Authorization', () => {
   });
 });
 
+describe('Security: Resource Deletion Authorization', () => {
+  it('should allow creator to delete modern resource', async () => {
+    const testRoot = path.join(tmpdir(), `brainstorm-test-${Date.now()}`);
+    const storage = new FileSystemStorage(testRoot);
+    await storage.initialize();
+
+    // Setup: create project and member
+    const project: ProjectMetadata = {
+      project_id: 'test-project',
+      name: 'Test',
+      created_at: new Date().toISOString(),
+      schema_version: '1.0'
+    };
+    await storage.createProject(project);
+
+    const creator: ProjectMember = {
+      project_id: 'test-project',
+      agent_name: 'creator-agent',
+      agent_id: 'id-creator',
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+      online: true
+    };
+    await storage.joinProject(creator);
+
+    // Create resource as creator
+    const manifest: ResourceManifest = {
+      project_id: 'test-project',
+      resource_id: 'test-resource',
+      name: 'Test Resource',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      etag: '',
+      permissions: {
+        read: ['*'],
+        write: ['creator-agent']
+      }
+    };
+    await storage.storeResource(manifest, 'creator-agent', 'test content');
+
+    // Creator should be able to delete
+    await assert.doesNotReject(
+      () => storage.deleteResource('test-project', 'test-resource', 'creator-agent'),
+      'Creator should be able to delete resource'
+    );
+
+    // Verify resource is deleted
+    const result = await storage.getResource('test-project', 'test-resource', 'creator-agent');
+    assert.strictEqual(result, null, 'Resource should be deleted');
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+  });
+
+  it('should reject deletion by non-creator for modern resource', async () => {
+    const testRoot = path.join(tmpdir(), `brainstorm-test-${Date.now()}`);
+    const storage = new FileSystemStorage(testRoot);
+    await storage.initialize();
+
+    // Setup
+    const project: ProjectMetadata = {
+      project_id: 'test-project',
+      name: 'Test',
+      created_at: new Date().toISOString(),
+      schema_version: '1.0'
+    };
+    await storage.createProject(project);
+
+    const creator: ProjectMember = {
+      project_id: 'test-project',
+      agent_name: 'creator-agent',
+      agent_id: 'id-creator',
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+      online: true
+    };
+    await storage.joinProject(creator);
+
+    const other: ProjectMember = {
+      project_id: 'test-project',
+      agent_name: 'other-agent',
+      agent_id: 'id-other',
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+      online: true
+    };
+    await storage.joinProject(other);
+
+    // Create resource as creator
+    const manifest: ResourceManifest = {
+      project_id: 'test-project',
+      resource_id: 'test-resource',
+      name: 'Test Resource',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      etag: '',
+      permissions: {
+        read: ['*'],
+        write: ['creator-agent', 'other-agent']
+      }
+    };
+    await storage.storeResource(manifest, 'creator-agent', 'test content');
+
+    // Non-creator tries to delete (even with write permission)
+    await assert.rejects(
+      () => storage.deleteResource('test-project', 'test-resource', 'other-agent'),
+      { message: /only the resource creator can delete it/ },
+      'Non-creator should not be able to delete modern resource'
+    );
+
+    // Verify resource still exists
+    const result = await storage.getResource('test-project', 'test-resource', 'creator-agent');
+    assert.ok(result, 'Resource should still exist');
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+  });
+
+  it('should allow deletion of legacy resource with write permissions', async () => {
+    const testRoot = path.join(tmpdir(), `brainstorm-test-${Date.now()}`);
+    const storage = new FileSystemStorage(testRoot);
+    await storage.initialize();
+
+    // Setup
+    const project: ProjectMetadata = {
+      project_id: 'test-project',
+      name: 'Test',
+      created_at: new Date().toISOString(),
+      schema_version: '1.0'
+    };
+    await storage.createProject(project);
+
+    const agent: ProjectMember = {
+      project_id: 'test-project',
+      agent_name: 'agent-a',
+      agent_id: 'id-a',
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+      online: true
+    };
+    await storage.joinProject(agent);
+
+    // Create legacy resource manually (without creator_agent)
+    const resourceDir = path.join(testRoot, 'projects', 'test-project', 'resources', 'legacy-resource');
+    await fs.mkdir(resourceDir, { recursive: true });
+
+    const legacyManifest = {
+      resource_id: 'legacy-resource',
+      project_id: 'test-project',
+      name: 'Legacy Resource',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      etag: 'legacy-etag-1',
+      permissions: {
+        read: ['*'],
+        write: ['agent-a']
+      }
+      // Note: no creator_agent field
+    };
+    await fs.writeFile(
+      path.join(resourceDir, 'manifest.json'),
+      JSON.stringify(legacyManifest, null, 2)
+    );
+
+    // Agent with write permission should be able to delete
+    await assert.doesNotReject(
+      () => storage.deleteResource('test-project', 'legacy-resource', 'agent-a'),
+      'Agent with write permission should be able to delete legacy resource'
+    );
+
+    // Verify resource is deleted
+    const result = await storage.getResource('test-project', 'legacy-resource', 'agent-a');
+    assert.strictEqual(result, null, 'Legacy resource should be deleted');
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+  });
+
+  it('should reject deletion of legacy resource without write permissions', async () => {
+    const testRoot = path.join(tmpdir(), `brainstorm-test-${Date.now()}`);
+    const storage = new FileSystemStorage(testRoot);
+    await storage.initialize();
+
+    // Setup
+    const project: ProjectMetadata = {
+      project_id: 'test-project',
+      name: 'Test',
+      created_at: new Date().toISOString(),
+      schema_version: '1.0'
+    };
+    await storage.createProject(project);
+
+    const agent: ProjectMember = {
+      project_id: 'test-project',
+      agent_name: 'agent-a',
+      agent_id: 'id-a',
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+      online: true
+    };
+    await storage.joinProject(agent);
+
+    const unauthorized: ProjectMember = {
+      project_id: 'test-project',
+      agent_name: 'unauthorized-agent',
+      agent_id: 'id-unauth',
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+      online: true
+    };
+    await storage.joinProject(unauthorized);
+
+    // Create legacy resource manually (without creator_agent)
+    const resourceDir = path.join(testRoot, 'projects', 'test-project', 'resources', 'legacy-resource');
+    await fs.mkdir(resourceDir, { recursive: true });
+
+    const legacyManifest = {
+      resource_id: 'legacy-resource',
+      project_id: 'test-project',
+      name: 'Legacy Resource',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      etag: 'legacy-etag-1',
+      permissions: {
+        read: ['*'],
+        write: ['agent-a']
+      }
+      // Note: no creator_agent field
+    };
+    await fs.writeFile(
+      path.join(resourceDir, 'manifest.json'),
+      JSON.stringify(legacyManifest, null, 2)
+    );
+
+    // Agent without write permission tries to delete
+    await assert.rejects(
+      () => storage.deleteResource('test-project', 'legacy-resource', 'unauthorized-agent'),
+      { message: /only agents with write permission can delete legacy resources/ },
+      'Agent without write permission should not be able to delete legacy resource'
+    );
+
+    // Verify resource still exists
+    const result = await storage.getResource('test-project', 'legacy-resource', 'agent-a');
+    assert.ok(result, 'Legacy resource should still exist');
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+  });
+
+  it('should reject deletion with invalid resource_id (path traversal)', async () => {
+    const testRoot = path.join(tmpdir(), `brainstorm-test-${Date.now()}`);
+    const storage = new FileSystemStorage(testRoot);
+    await storage.initialize();
+
+    // Try to delete with path traversal
+    await assert.rejects(
+      () => storage.deleteResource('test-project', '../../../etc/passwd', 'attacker'),
+      { message: /Invalid resource_id/ },
+      'Should reject path traversal in resource_id'
+    );
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+  });
+
+  it('should handle deletion of non-existent resource', async () => {
+    const testRoot = path.join(tmpdir(), `brainstorm-test-${Date.now()}`);
+    const storage = new FileSystemStorage(testRoot);
+    await storage.initialize();
+
+    // Create project
+    const project: ProjectMetadata = {
+      project_id: 'test-project',
+      name: 'Test',
+      created_at: new Date().toISOString(),
+      schema_version: '1.0'
+    };
+    await storage.createProject(project);
+
+    const agent: ProjectMember = {
+      project_id: 'test-project',
+      agent_name: 'agent-a',
+      agent_id: 'id-a',
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+      online: true
+    };
+    await storage.joinProject(agent);
+
+    // Try to delete non-existent resource
+    await assert.rejects(
+      () => storage.deleteResource('test-project', 'nonexistent', 'agent-a'),
+      { message: /Resource not found/ },
+      'Should reject deletion of non-existent resource'
+    );
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+  });
+
+  it('should handle idempotent deletion (already deleted)', async () => {
+    const testRoot = path.join(tmpdir(), `brainstorm-test-${Date.now()}`);
+    const storage = new FileSystemStorage(testRoot);
+    await storage.initialize();
+
+    // Setup
+    const project: ProjectMetadata = {
+      project_id: 'test-project',
+      name: 'Test',
+      created_at: new Date().toISOString(),
+      schema_version: '1.0'
+    };
+    await storage.createProject(project);
+
+    const creator: ProjectMember = {
+      project_id: 'test-project',
+      agent_name: 'creator-agent',
+      agent_id: 'id-creator',
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+      online: true
+    };
+    await storage.joinProject(creator);
+
+    // Create resource
+    const manifest: ResourceManifest = {
+      project_id: 'test-project',
+      resource_id: 'test-resource',
+      name: 'Test Resource',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      etag: '',
+      permissions: {
+        read: ['*'],
+        write: ['creator-agent']
+      }
+    };
+    await storage.storeResource(manifest, 'creator-agent', 'test content');
+
+    // Delete resource first time
+    await storage.deleteResource('test-project', 'test-resource', 'creator-agent');
+
+    // Delete again - should be idempotent (no error, already deleted)
+    // Note: This will fail with "Resource not found" which is expected behavior
+    // The idempotency is at the filesystem level (ENOENT handling)
+    // But at the API level, we throw NotFoundError for missing resources
+    await assert.rejects(
+      () => storage.deleteResource('test-project', 'test-resource', 'creator-agent'),
+      { message: /Resource not found/ },
+      'Should throw NotFoundError for already-deleted resource'
+    );
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+  });
+});
+
 describe('Concurrency: Heartbeat Race Condition Prevention', () => {
   it('should handle concurrent heartbeats without lost updates', async () => {
     const testRoot = path.join(tmpdir(), `brainstorm-test-${Date.now()}`);
