@@ -662,7 +662,7 @@ export class FileSystemStorage {
     }
   }
 
-  async listProjects(offset?: number, limit?: number): Promise<ProjectMetadata[]> {
+  async listProjects(offset?: number, limit?: number, includeArchived?: boolean): Promise<ProjectMetadata[]> {
     const projectsDir = path.join(this.root, 'projects');
 
     try {
@@ -673,7 +673,10 @@ export class FileSystemStorage {
         if (entry.isDirectory()) {
           const metadata = await this.getProjectMetadata(entry.name);
           if (metadata) {
-            projects.push(metadata);
+            // Filter archived projects by default (v0.9.0+)
+            if (includeArchived || !metadata.archived) {
+              projects.push(metadata);
+            }
           }
         }
       }
@@ -1084,20 +1087,31 @@ export class FileSystemStorage {
       const inboxDir = path.join(this.root, 'projects', projectId, 'messages', agentName);
       const files = await fs.readdir(inboxDir);
 
+      // Diagnostic logging for debugging duplicate message issue
+      console.error(`[markMessageProcessed] Looking for messageId: ${messageId}`);
+      console.error(`[markMessageProcessed] Inbox directory: ${inboxDir}`);
+      console.error(`[markMessageProcessed] Files in inbox (${files.length}):`, files);
+
       for (const file of files) {
         if (file.includes(messageId)) {
           const messagePath = path.join(inboxDir, file);
+          console.error(`[markMessageProcessed] MATCH FOUND: ${file} - Deleting...`);
           try {
             await fs.unlink(messagePath);
+            console.error(`[markMessageProcessed] Successfully deleted: ${file}`);
             return;
           } catch (err: any) {
             if (err.code === 'ENOENT') {
+              console.error(`[markMessageProcessed] File already deleted: ${file}`);
               return; // Already deleted
             }
+            console.error(`[markMessageProcessed] Error deleting file: ${err.message}`);
             throw err;
           }
         }
       }
+
+      console.error(`[markMessageProcessed] WARNING: No matching file found for messageId: ${messageId}`);
     } finally {
       await unlock();
     }

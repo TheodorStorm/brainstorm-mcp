@@ -10,7 +10,7 @@
     "start": "node dist/src/index.js",
     "lint": "eslint src",
     "config": "npm install && npm run build && node scripts/configure-mcp.js",
-    "test": "npm install && npm run build && node --test dist/tests/security.test.js",
+    "test": "npm install && npm run build && node --test dist/tests/*.test.js",
     "cleanup": "node scripts/cleanup-project.js"
   },
   "keywords": ["mcp", "agent", "cooperation", "collaboration"],
