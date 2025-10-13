@@ -1,6 +1,6 @@
 # Brainstorm
 
-**Version 0.8.0**
+**Version 0.9.0**
 
 **Brainstorm enables multiple Claude Code instances on the same computer to communicate and collaborate.**
 
@@ -21,7 +21,7 @@ DISCLAIMER: This status of this project is "works on my computer™". I hope it 
 
 ## Features
 
-- **Context-Aware Prompts**: 8 intelligent prompts with real-time state injection for guided workflows
+- **Context-Aware Prompts**: 10 intelligent prompts with real-time state injection for guided workflows
 - **Project-Based Organization**: Projects are the organizing unit—agents join projects with friendly names
 - **Natural Communication**: Send messages using simple names like "frontend" or "backend"
 - **Shared Context**: Project descriptions and goals automatically visible to all members
@@ -87,6 +87,18 @@ Reply to ongoing discussion with context.
 - **Context**: Shows last 3 messages with reply status
 - **Smart guidance**: Suggests whether to broadcast or direct message based on discussion
 - **Use case**: Responding to team discussions with full context
+
+#### 🚪 leave
+Gracefully leave a project with cleanup.
+- **Context**: Shows project membership and cleanup actions
+- **Smart cleanup**: Archives messages, removes membership, cleans client session
+- **Use case**: Leaving completed projects or when agent role changes
+
+#### 📦 archive
+Mark a project as completed/inactive.
+- **Context**: Shows project status and member list
+- **Archiving**: Sets archived flag, timestamp, and reason
+- **Use case**: Preserving completed projects while hiding from active lists
 
 ### Using Prompts vs Tools
 
@@ -179,6 +191,7 @@ Alternatively, manually add to your MCP settings (`~/.claude/mcp_config.json`):
 **Environment Variables:**
 - `BRAINSTORM_STORAGE`: Custom storage path (default: `~/.brainstorm`)
 - `BRAINSTORM_MAX_PAYLOAD_SIZE`: Maximum file size for resources via source_path (default: `512000` / 500KB)
+- `BRAINSTORM_CLIENT_ID`: Manual client ID specification for containerized deployments (optional, auto-generated from working directory by default)
 
 ## How It Works
 
@@ -304,10 +317,72 @@ Get project metadata and list of members. Use this to see who's in the project a
 ```
 
 #### `list_projects`
-List all available projects.
+List all available projects. **Supports pagination in v0.9.0+**
 
 ```typescript
-{}
+{
+  offset: 0,           // Optional: starting index (default: 0)
+  limit: 100,          // Optional: max results (default: 100, max: 1000)
+  includeArchived: false  // Optional: include archived projects (default: false)
+}
+```
+
+**Response:**
+```json
+{
+  "projects": [
+    {
+      "project_id": "api-redesign",
+      "name": "API Redesign Sprint",
+      "archived": false,
+      "created_at": "2025-10-13T10:00:00Z"
+    }
+  ],
+  "total": 1,
+  "offset": 0,
+  "limit": 100
+}
+```
+
+#### `leave_project`
+Gracefully leave a project with cleanup. **New in v0.9.0**
+
+```typescript
+{
+  project_id: "api-redesign",
+  agent_name: "frontend",
+  working_directory: "/Users/you/frontend-app"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Left project successfully",
+  "archived_messages": 5,
+  "cleanup_performed": true
+}
+```
+
+#### `archive_project`
+Mark a project as completed/inactive. **New in v0.9.0**
+
+```typescript
+{
+  project_id: "api-redesign",
+  agent_name: "backend",  // Usually project creator
+  archive_reason: "Migration completed successfully"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Project archived successfully",
+  "archived_at": "2025-10-13T10:00:00Z"
+}
 ```
 
 #### `delete_project`
@@ -499,12 +574,31 @@ Retrieve a shared resource. **Supports long-polling** to wait for resource creat
 ```
 
 #### `list_resources`
-List all resources in the project you have access to.
+List all resources in the project you have access to. **Supports pagination in v0.9.0+**
 
 ```typescript
 {
   project_id: "api-redesign",
-  agent_name: "frontend"
+  agent_name: "frontend",
+  offset: 0,           // Optional: starting index (default: 0)
+  limit: 100           // Optional: max results (default: 100, max: 1000)
+}
+```
+
+**Response:**
+```json
+{
+  "resources": [
+    {
+      "resource_id": "graphql-schema",
+      "name": "GraphQL Schema v2",
+      "creator_agent": "backend",
+      "created_at": "2025-10-13T10:00:00Z"
+    }
+  ],
+  "total": 1,
+  "offset": 0,
+  "limit": 100
 }
 ```
 
@@ -584,9 +678,9 @@ Get your status across all projects you've joined from a specific working direct
 
 Brainstorm automatically remembers which projects you've joined across sessions, allowing seamless collaboration resumption. Each working directory maintains its own persistent session.
 
-### How It Works (v0.8.0)
+### How It Works (v0.9.0)
 
-Each **working directory** on your computer gets a unique, persistent session identifier (derived via SHA-256 hash). This directory-based approach means:
+Each **working directory** on your computer gets a unique, persistent session identifier (derived via SHA-256 hash or specified via `BRAINSTORM_CLIENT_ID` environment variable). This directory-based approach means:
 
 - Different project directories maintain separate Brainstorm identities
 - Same directory always reconnects to the same projects
@@ -853,7 +947,7 @@ get_resource({
 │           └── <resource-id>/
 │               ├── manifest.json   # Metadata, permissions
 │               └── payload/data    # Actual content
-├── clients/                        # Session persistence (v0.8.0)
+├── clients/                        # Session persistence (v0.8.0+)
 │   └── <sha256-hash-of-working-directory>/
 │       ├── identity.json           # Working directory, created timestamp
 │       └── memberships.json        # [{project_id, agent_name, joined_at}]
@@ -870,7 +964,8 @@ get_resource({
 
 1. **MCP Protocol Layer** (`src/server.ts`)
    - Implements MCP server over stdio transport
-   - Exposes 15 tools for project cooperation
+   - Exposes 17 tools for project cooperation (v0.9.0+)
+   - Provides 10 context-aware prompts for guided workflows
    - Handles request validation and error responses
 
 2. **Storage Abstraction Layer** (`src/storage.ts`)
@@ -899,9 +994,9 @@ get_resource({
 - Lock scope kept narrow for maximum concurrency
 
 **Long-Polling**:
-- 1-second poll interval, configurable timeout (max 300s)
+- 2-second poll interval (v0.9.0+), configurable timeout (max 900s)
 - Immediately returns when messages arrive
-- Efficient for real-time coordination
+- Efficient for real-time coordination with reduced I/O load
 
 ## Security Model
 
