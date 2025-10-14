@@ -150,6 +150,35 @@ import type {
 } from './types.js';
 
 /**
+ * Get human-readable description of agent role.
+ *
+ * Provides clear explanation of responsibilities for each role to help agents
+ * understand their function in the project.
+ *
+ * **Roles:**
+ * - **coordinator**: Facilitates human-in-the-loop approval workflow
+ * - **contributor** (default): Completes work and sends handoffs for approval
+ *
+ * **Complexity:** O(1) - simple string lookup
+ *
+ * @param role - Agent's role label (from member.labels.role)
+ * @returns Human-readable description of role responsibilities
+ *
+ * @example
+ * getRoleDescription('coordinator')
+ * // "Coordinator - You facilitate human-in-the-loop approval..."
+ *
+ * getRoleDescription(undefined)
+ * // "Contributor - Complete assigned work..."
+ */
+function getRoleDescription(role?: string): string {
+  if (role === 'coordinator') {
+    return 'Coordinator - You facilitate human-in-the-loop approval. Present contributor work to humans for approval/rejection.';
+  }
+  return 'Contributor - Complete assigned work and send handoff messages to coordinator when done.';
+}
+
+/**
  * Generate deterministic client ID from working directory path.
  *
  * This function creates a stable client identity based on the working directory,
@@ -1102,6 +1131,17 @@ export class AgentCoopServer {
               details: { agent_id: member.agent_id, client_id: clientId, working_directory: workingDirectory }
             });
 
+            // Determine role and provide appropriate guidance
+            const assignedRole = labels.role || 'contributor';
+            const isCoordinator = assignedRole === 'coordinator';
+
+            let roleMessage: string;
+            if (isCoordinator) {
+              roleMessage = '✅ Joined as COORDINATOR. You facilitate human-in-the-loop approval: present contributor work to humans, await signoff, relay decisions. Use handover_coordinator tool to transfer role if needed.';
+            } else {
+              roleMessage = '✅ Joined as CONTRIBUTOR. Complete assigned work and send handoff messages to coordinator when done. Wait for coordinator approval before leaving discussion.';
+            }
+
             return {
               content: [{
                 type: 'text',
@@ -1110,7 +1150,9 @@ export class AgentCoopServer {
                   working_directory: workingDirectory,
                   agent_name: member.agent_name,
                   agent_id: member.agent_id,
-                  message: 'Joined project successfully. Your membership is automatically tracked by your working directory.'
+                  role: assignedRole,
+                  role_description: getRoleDescription(assignedRole),
+                  message: roleMessage
                 }, null, 2)
               }]
             };
@@ -1803,10 +1845,15 @@ export class AgentCoopServer {
                 const messages = await this.storage.getAgentInbox(membership.project_id, membership.agent_name);
                 const member = await this.storage.getProjectMember(membership.project_id, membership.agent_name);
 
+                // Extract role information from member labels
+                const role = member?.labels?.role || 'contributor';
+
                 projectStatuses.push({
                   project_id: membership.project_id,
                   project_name: membership.project_name,
                   agent_name: membership.agent_name,
+                  role: role,
+                  role_description: getRoleDescription(role),
                   joined_at: membership.joined_at,
                   last_seen: member?.last_seen || membership.joined_at,
                   online: member?.online || false,
