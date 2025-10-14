@@ -74,6 +74,9 @@ export interface ProjectMetadata {
   /** Optional reason for archiving - v0.9.0+ */
   archive_reason?: string;
 
+  /** Agent name serving as project coordinator (human-in-the-loop proxy) - v0.11.0+ */
+  coordinator_agent?: string;
+
   /** Schema version for forward compatibility */
   schema_version: string;
 }

@@ -19,8 +19,8 @@
  * - DoS protection for concurrent requests
  *
  * **Coordinator Pattern (Human-in-the-Loop):**
- * - Each project has ONE coordinator (enforced via storage validation)
- * - Project creator automatically becomes coordinator (labels.role = 'coordinator')
+ * - Each project has ONE coordinator stored in project metadata (v0.11.0+)
+ * - Project creator automatically becomes coordinator (metadata.coordinator_agent)
  * - **CRITICAL**: Coordinator is a PROXY for human approval, NOT an autonomous decision-maker
  * - Contributors MUST hand off to coordinator before leaving discussion
  * - Coordinator MUST present work to human, await signoff, THEN respond to contributors
@@ -28,7 +28,7 @@
  * **Handoff Workflow (Human-Approved):**
  *
  * **Contributors** complete work and hand off:
- * 1. Send handoff message to coordinator (find via get_project_info, look for labels.role === 'coordinator')
+ * 1. Send handoff message to coordinator (find via get_project_info, use project.coordinator field)
  * 2. Set payload.type = 'handoff'
  * 3. Set metadata.message_type = 'handoff_to_coordinator'
  * 4. Include summary of completed work in payload.summary
@@ -1095,20 +1095,13 @@ export class AgentCoopServer {
             // Get project metadata to check if this agent is the creator
             const projectMetadata = await this.storage.getProjectMetadata(projectId);
 
-            // Automatically assign coordinator role to project creator (backwards compatible)
-            let labels = (args.labels as Record<string, string>) || {};
-            if (projectMetadata && projectMetadata.created_by === agentName && !labels.role) {
-              // Creator joins with coordinator role by default
-              labels = { ...labels, role: 'coordinator' };
-            }
-
             const member: ProjectMember = {
               project_id: projectId,
               agent_name: agentName,
               agent_id: randomUUID(),
               client_id: clientId, // Include client_id for name reclaiming
               capabilities: (args.capabilities as string[]) || [],
-              labels: labels,
+              labels: (args.labels as Record<string, string>) || {}, // Custom agent labels only (not structural roles)
               joined_at: new Date().toISOString(),
               last_seen: new Date().toISOString(),
               online: true
@@ -1116,11 +1109,12 @@ export class AgentCoopServer {
 
             await this.storage.joinProject(member);
 
-            // Ensure project has coordinator (v0.10.0 migration - backfills for legacy projects)
+            // Ensure project has coordinator (v0.11.0 migration - backfills metadata for legacy projects)
             await this.storage.ensureProjectHasCoordinator(projectId);
 
-            // Use project metadata from earlier (already fetched for coordinator check)
-            const projectName = projectMetadata?.name || projectId;
+            // Refresh metadata to get coordinator_agent field (may have been set by migration)
+            const updatedMetadata = await this.storage.getProjectMetadata(projectId);
+            const projectName = updatedMetadata?.name || projectId;
 
             // Store client identity and record membership
             await this.storage.storeClientIdentity(clientId);
@@ -1134,10 +1128,10 @@ export class AgentCoopServer {
               details: { agent_id: member.agent_id, client_id: clientId, working_directory: workingDirectory }
             });
 
-            // Determine role and provide appropriate guidance - emphasize agent identity
-            const assignedRole = labels.role || 'contributor';
-            const isCoordinator = assignedRole === 'coordinator';
+            // Determine role based on project metadata (structural role, not custom label)
+            const isCoordinator = updatedMetadata?.coordinator_agent === agentName;
 
+            const structuralRole = isCoordinator ? 'coordinator' : 'contributor';
             let roleMessage: string;
             if (isCoordinator) {
               roleMessage = `✅ YOU are now the "${agentName}" agent with the COORDINATOR role in this project. You facilitate human-in-the-loop approval: present contributor work to humans, await signoff, relay decisions. Use handover_coordinator tool to transfer role if needed.`;
@@ -1154,8 +1148,8 @@ export class AgentCoopServer {
                   critical_reminder: '⚠️ CRITICAL: For ALL future Brainstorm tool calls (leave_project, status, etc.), ALWAYS use the initial "Working directory" value from your <env> block (shown at conversation start). NEVER use current PWD or values from tool responses. Session persistence depends on using the exact same directory consistently throughout your conversation.',
                   agent_name: member.agent_name,
                   agent_id: member.agent_id,
-                  role: assignedRole,
-                  role_description: getRoleDescription(assignedRole),
+                  role: structuralRole,
+                  role_description: getRoleDescription(structuralRole),
                   message: roleMessage
                 }, null, 2)
               }]
@@ -1201,19 +1195,20 @@ export class AgentCoopServer {
                 while (Date.now() - startTime < timeoutMs) {
                   const metadata = await this.storage.getProjectMetadata(projectId);
                   if (metadata) {
-                    // Ensure project has coordinator (v0.10.0 migration)
+                    // Ensure project has coordinator (v0.11.0 migration)
                     await this.storage.ensureProjectHasCoordinator(projectId);
 
+                    // Refresh metadata to get coordinator_agent field (may have been set by migration)
+                    const updatedMetadata = await this.storage.getProjectMetadata(projectId);
                     const members = await this.storage.listProjectMembers(projectId);
-                    // Find the coordinator (member with labels.role === 'coordinator')
-                    const coordinator = members.find(m => m.labels?.role === 'coordinator');
+
                     return {
                       content: [{
                         type: 'text',
                         text: JSON.stringify({
-                          project: metadata,
+                          project: updatedMetadata,
                           members: members,
-                          coordinator: coordinator?.agent_name || null,
+                          coordinator: updatedMetadata?.coordinator_agent || null,
                           waited_ms: Date.now() - startTime
                         }, null, 2)
                       }]
@@ -1259,20 +1254,20 @@ export class AgentCoopServer {
               };
             }
 
-            // Ensure project has coordinator (v0.10.0 migration)
+            // Ensure project has coordinator (v0.11.0 migration)
             await this.storage.ensureProjectHasCoordinator(projectId);
 
+            // Refresh metadata to get coordinator_agent field (may have been set by migration)
+            const updatedMetadata = await this.storage.getProjectMetadata(projectId);
             const members = await this.storage.listProjectMembers(projectId);
-            // Find the coordinator (member with labels.role === 'coordinator')
-            const coordinator = members.find(m => m.labels?.role === 'coordinator');
 
             return {
               content: [{
                 type: 'text',
                 text: JSON.stringify({
-                  project: metadata,
+                  project: updatedMetadata,
                   members: members,
-                  coordinator: coordinator?.agent_name || null
+                  coordinator: updatedMetadata?.coordinator_agent || null
                 }, null, 2)
               }]
             };
@@ -2082,21 +2077,24 @@ export class AgentCoopServer {
 
             for (const membership of memberships) {
               try {
-                // Ensure project has coordinator (v0.10.0 migration)
+                // Ensure project has coordinator (v0.11.0 migration)
                 await this.storage.ensureProjectHasCoordinator(membership.project_id);
 
                 const messages = await this.storage.getAgentInbox(membership.project_id, membership.agent_name);
                 const member = await this.storage.getProjectMember(membership.project_id, membership.agent_name);
 
-                // Extract role information from member labels
-                const role = member?.labels?.role || 'contributor';
+                // Get project metadata to determine structural role (coordinator vs contributor)
+                const projectMetadata = await this.storage.getProjectMetadata(membership.project_id);
+                const isCoordinator = projectMetadata?.coordinator_agent === membership.agent_name;
+                const structuralRole = isCoordinator ? 'coordinator' : 'contributor';
 
                 projectStatuses.push({
                   project_id: membership.project_id,
                   project_name: membership.project_name,
                   agent_name: membership.agent_name,
-                  role: role,
-                  role_description: getRoleDescription(role),
+                  role: structuralRole,
+                  role_description: getRoleDescription(structuralRole),
+                  labels: member?.labels || {}, // Include custom agent labels
                   joined_at: membership.joined_at,
                   last_seen: member?.last_seen || membership.joined_at,
                   online: member?.online || false,
@@ -2109,9 +2107,9 @@ export class AgentCoopServer {
             }
 
             // Build identity reminder - emphasize agent identity
-            const identityReminder = projectStatuses.map(p =>
-              `📛 In project "${p.project_name}" (${p.project_id}): YOU (${p.agent_name}) are the ${p.role} agent`
-            );
+            const identityReminder = projectStatuses.map(p => {
+              return `📛 In project "${p.project_name}" (${p.project_id}): YOU (${p.agent_name}) are the ${p.role} agent`;
+            });
 
             // Build agent-centric status message
             const totalUnread = projectStatuses.reduce((sum, p) => sum + p.unread_messages, 0);
@@ -2183,8 +2181,8 @@ export class AgentCoopServer {
             const clientId = resolveClientId(workingDirectory);
 
             // Check if leaving agent is the coordinator - HARD BLOCK if so
-            const member = await this.storage.getProjectMember(projectId, agentName);
-            const isCoordinator = member?.labels?.role === 'coordinator';
+            const projectMetadata = await this.storage.getProjectMetadata(projectId);
+            const isCoordinator = projectMetadata?.coordinator_agent === agentName;
 
             // HARD BLOCK: Coordinators must handover before leaving
             if (isCoordinator) {
@@ -2335,8 +2333,8 @@ ${existingProjects.length > 0 ? `\n**Existing projects** (${existingProjects.len
 4. Join it automatically with \`join_project\`
 
 **IMPORTANT - Coordinator Role (Human-in-the-Loop):**
-- As the project creator, you will automatically become the **coordinator** (labels.role = 'coordinator')
-- Only ONE coordinator is allowed per project (enforced by the system)
+- As the project creator, you will automatically become the **coordinator** (project.coordinator_agent)
+- Only ONE coordinator is allowed per project (stored in project metadata)
 - **CRITICAL**: As coordinator, you are a PROXY for human approval, NOT an autonomous decision-maker
 - Your responsibilities:
   1. **Receive** handoffs from contributors when they complete work
@@ -2405,9 +2403,9 @@ ${projectList}
 
 **Once I provide this info, you'll:**
 1. Get detailed project info with \`get_project_info\` to see current members
-2. Check who is the coordinator (look for member with labels.role === 'coordinator')
+2. Check who is the coordinator (use the \`coordinator\` field from get_project_info response)
 3. Suggest available contributor roles based on existing members
-4. Join with \`join_project\` (do NOT set labels.role = 'coordinator' - only one coordinator allowed!)
+4. Join with \`join_project\` (use labels for custom agent descriptions like "frontend", "backend")
 5. Check for unread messages with \`receive_messages\`
 
 **IMPORTANT - Contributor Role:**
@@ -2449,7 +2447,7 @@ ${projectList}
 
 **I'll then:**
 1. Get the project members list with \`get_project_info\`
-2. Check who is the coordinator (labels.role === 'coordinator')
+2. Check who is the coordinator (use the \`coordinator\` field from response)
 3. Analyze if your message expects responses (questions, requests, assignments)
 4. Send with \`send_message\` using broadcast=true
 
@@ -2467,7 +2465,7 @@ ${projectList}
 
 **Handoff Workflow (Human-Approved):**
 **Contributors** - when you've completed your work:
-1. Find the coordinator using \`get_project_info\` (look for labels.role === 'coordinator')
+1. Find the coordinator using \`get_project_info\` (use the \`coordinator\` field from response)
 2. Send direct message to coordinator with:
    - payload.type = 'handoff'
    - payload.summary = "Brief summary of completed work"
@@ -2519,7 +2517,7 @@ ${projectList}
 **The review will show:**
 - 📋 Project overview (name, description, created date)
 - 👥 Team members (who's online, when they joined)
-- 🎯 **Coordinator** (who is responsible for human-in-the-loop approval - look for labels.role === 'coordinator')
+- 🎯 **Coordinator** (who is responsible for human-in-the-loop approval - from project.coordinator field)
 - 📬 Your unread messages (recent messages with previews)
 - 📦 Available resources (shared documents and data)
 
@@ -2639,7 +2637,7 @@ When broadcasting the notification about the shared resource:
 
 **Handoff Workflow (Human-Approved):**
 **Contributors** - when you've completed your work:
-1. Find the coordinator using \`get_project_info\` (look for labels.role === 'coordinator')
+1. Find the coordinator using \`get_project_info\` (use the \`coordinator\` field from response)
 2. Send direct message to coordinator with:
    - payload.type = 'handoff'
    - payload.summary = "Brief summary of completed work"

@@ -1,6 +1,6 @@
 # Brainstorm
 
-**Version 0.10.0**
+**Version 0.11.0**
 
 **Brainstorm enables multiple Claude Code instances on the same computer to communicate and collaborate.**
 
