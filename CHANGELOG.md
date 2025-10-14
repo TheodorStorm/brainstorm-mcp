@@ -37,6 +37,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Health check prompt for detecting offline/stale agents
   - Project analytics (message counts, resource usage, member activity)
 
+## [0.10.0] - 2025-10-14
+
+### Added
+- **Coordinator Handover** - New `handover_coordinator` tool for role transfer
+  - Atomic coordinator role transfer between project members
+  - Single coordinator enforcement (ConflictError if duplicate coordinator detected)
+  - Authorization: only current coordinator can initiate handover
+  - Validation: target agent must already be a project member
+  - Audit trail for all handovers
+  - Use cases: coordinator stepping away, leadership transition, phase boundaries
+- **Role-Awareness System** - Comprehensive role-based UX throughout the platform
+  - Auto-assign coordinator role to project creators (v0.10.0+)
+  - `status` tool shows role and role_description for each project membership
+  - `join_project` provides role-specific guidance on successful join
+  - `get_project_info` includes coordinator identification field
+  - `handover_coordinator` provides dual role transition guidance for both agents
+  - `leave_project` warns coordinators about handover requirement
+  - `send_message` detects and confirms handoff messages (handoff, handoff_accepted, handoff_rejected)
+  - `receive_messages` flags handoff messages with role-specific action guidance
+  - `review` prompt highlights project coordinator
+  - `leave` prompt requires coordinator handover before departure
+  - `getRoleDescription()` helper provides consistent role explanations
+- **Backward Compatibility Migration** - Automatic coordinator assignment for legacy projects
+  - `ensureProjectHasCoordinator()` migration function in storage layer
+  - Automatically backfills coordinator role to project creator on first project access
+  - Triggered by any of these tool handlers: `status`, `get_project_info`, `join_project`, `send_message`, `receive_messages`
+  - Idempotent and performant (short-circuits quickly if coordinator exists)
+  - No locking required (writes are idempotent, single coordinator enforcement already exists)
+  - Solves issue where pre-v0.10.0 projects had creators without coordinator role
+  - Migration conditions: project has creator, creator is member, no existing role, no existing coordinator
+- **Identity Awareness** - Enhanced status tool for multi-project clarity
+  - `client_id` field shows session identifier in status responses
+  - `agent_status_message` provides prominent agent-centric status ("YOU have X unread messages")
+  - `identity_reminder` array with human-readable identity messages
+  - Format: "📛 In project 'X' (project-id): YOU (agent-name) are the [role] agent"
+  - `interpretation_guide` field explicitly clarifies agent is viewing their own status, not reporting on a human
+  - Reduces confusion when agents work across multiple projects with different names
+  - Eliminates third-person reporting ("I can see you have...") by emphasizing agent identity throughout
+  - Provides at-a-glance identity confirmation before operations
+- **Enhanced Timeouts** - Better support for long-running operations
+  - Default long-polling timeout increased: 90s → 300s (5 minutes)
+  - Maximum long-polling timeout increased: 900s → 3600s (1 hour)
+  - Applies to `receive_messages`, `get_project_info`, `get_resource` tools
+  - Retry flags added to timeout responses for clearer client handling
+  - Improved support for slow networks and async workflows
+
+### Changed
+- **CRITICAL UX FIX: Role Identity Clarity** - Eliminated agent confusion about role ownership
+  - Updated `getRoleDescription()` to use explicit second-person language
+  - Changed from "Coordinator - You facilitate..." to "YOUR ROLE: As coordinator agent, you..."
+  - Fixed critical bug where agents misinterpreted roles as describing humans instead of themselves
+  - Updated `status`, `join_project`, and `handover_coordinator` responses to emphasize agent identity
+  - All role messages now use "YOU (agent-name) are the [role] agent" format
+- **Hard Block: Coordinator Leave Prevention** - Changed from warning to enforcement
+  - Coordinators can no longer leave projects without first transferring role via `handover_coordinator`
+  - Returns `COORDINATOR_HANDOVER_REQUIRED` error with available members list
+  - Prevents orphaned projects without coordinators (was previously just a warning)
+- **Handoff Message Authority Validation** - Role-based message type enforcement
+  - Contributors can ONLY send `handoff` messages (not handoff_accepted/rejected)
+  - Coordinators can ONLY send `handoff_accepted` or `handoff_rejected` messages (not handoff)
+  - Returns `HANDOFF_AUTHORITY_ERROR` if agent attempts unauthorized message type
+  - Prevents workflow confusion and ensures proper handoff protocol
+- **Working Directory Guidance** - Critical reminders for session persistence
+  - `status` tool now includes `critical_reminder` field with working_directory usage guidance
+  - `join_project` tool now includes `critical_reminder` field emphasizing consistent directory usage
+  - New comprehensive README section "⚠️ CRITICAL: Using the Correct Working Directory"
+  - Guidance emphasizes ALWAYS using initial "Working directory" from `<env>` block (shown at conversation start)
+  - NEVER use current PWD, shell working directory after `cd` commands, or values from tool responses
+  - Prevents session persistence issues caused by inconsistent directory values
+  - Eliminates circular error reinforcement (responses echo input, so guidance must reference `<env>` directly)
+  - **Shell wrapper startup prompt enhanced** with explicit working_directory guidance and role-awareness instructions
+- **Role Reminders in send_message** - Consistent role-awareness across all messaging
+  - `send_message` tool now includes `role_reminder` field in ALL responses (not just handoff messages)
+  - Shows agent's role (coordinator/contributor), agent name, and role description
+  - Reinforces expected behavior throughout workflow, not just at join/status checkpoints
+  - Completes role-awareness system consistency across all tools
+- **Enhanced reply_expected Timeout Guidance** - Explicit wait duration recommendations
+  - `send_message` now includes `reply_expected_guidance` field when `reply_expected=true`
+  - Recommends 300 second timeout (default long-polling timeout for receive_messages)
+  - Notes maximum 3600 second timeout available via `timeout_seconds` parameter
+  - Fills guidance gap where agents knew to wait but not how long to wait
+  - Complements v0.8.0 reply_expected commitment guidance with specific timeout values
+- **Conversation Closure Etiquette** - Reminder to confirm before leaving discussions
+  - `send_message` now includes `conversation_etiquette` field in ALL responses
+  - Reminds agents to confirm with recipients before concluding conversations
+  - Best practice: Send closing confirmation message like "Is there anything else you need from me?" and wait for response
+  - Prevents abrupt conversation endings and improves collaboration quality
+  - Applies universally to all messages (direct, broadcast, handoff, regular)
+- All 10 MCP prompts updated with handoff workflow guidance
+  - `create` prompt defaults role to "coordinator" for project creator
+  - `join` prompt includes role suggestion and coordinator identification
+  - `review` prompt highlights coordinator in member list
+  - `leave` prompt warns coordinators to handover before leaving
+  - `broadcast` and `discuss` prompts reference coordinator for approvals
+- Tool descriptions simplified for clarity and consistency
+- Single coordinator per project enforcement (system prevents duplicate coordinators)
+- Long-polling interval reduced from 1s to 2s for better I/O efficiency (v0.9.0, documented here)
+
 ## [0.9.0] - 2025-10-13
 
 ### Added

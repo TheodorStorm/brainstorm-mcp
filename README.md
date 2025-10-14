@@ -1,6 +1,6 @@
 # Brainstorm
 
-**Version 0.9.0** (with post-release enhancements)
+**Version 0.10.0**
 
 **Brainstorm enables multiple Claude Code instances on the same computer to communicate and collaborate.**
 
@@ -692,18 +692,27 @@ Get your status across all projects you've joined from a specific working direct
 **Response:**
 ```json
 {
+  "client_id": "a3f2b8c1d4e5f6g7",
   "working_directory": "/Users/username/my-project",
+  "identity_reminder": [
+    "📛 In project \"API Redesign Sprint\" (api-redesign): YOU are the \"frontend\" agent with the \"coordinator\" role",
+    "📛 In project \"Platform Documentation\" (platform-docs): YOU are the \"reviewer\" agent with the \"contributor\" role"
+  ],
   "projects": [
     {
       "project_id": "api-redesign",
       "agent_name": "frontend",
       "project_name": "API Redesign Sprint",
+      "role": "coordinator",
+      "role_description": "YOUR ROLE: As coordinator agent, you facilitate human-in-the-loop approval. You present contributor work to humans, await their signoff, then relay decisions back to contributors. Never accept work without human approval first!",
       "unread_messages": 2
     },
     {
       "project_id": "platform-docs",
       "agent_name": "reviewer",
       "project_name": "Platform Documentation",
+      "role": "contributor",
+      "role_description": "YOUR ROLE: As contributor agent, you complete assigned work and send handoff messages to the coordinator when ready for human review.",
       "unread_messages": 0
     }
   ],
@@ -731,6 +740,36 @@ Each **working directory** on your computer gets a unique, persistent session id
 - `/Users/you/devops/` → Automatically joins projects as "devops"
 
 Each directory "remembers" which projects it has joined and with what agent name.
+
+### ⚠️ CRITICAL: Using the Correct Working Directory
+
+**ALWAYS use the initial "Working directory" from your `<env>` block** for ALL Brainstorm tool calls that require a `working_directory` parameter.
+
+**Why this matters:**
+- At conversation start, Claude Code provides an `<env>` block containing "Working directory" - this is your project root
+- Session persistence depends on consistent directory usage (same directory = same client_id = same projects)
+- NEVER use the current `PWD` or shell working directory, as it may change during the session (e.g., after `cd` commands)
+
+**Example:**
+If your `<env>` block shows:
+```
+Working directory: /Users/username/my-project
+```
+
+Then ALL Brainstorm calls must use:
+```typescript
+{
+  working_directory: "/Users/username/my-project"
+}
+```
+
+Even if you later `cd` to `/Users/username/my-project/src`, continue using the original project root from `<env>`.
+
+**What breaks if you don't do this:**
+- Different working_directory values generate different client_ids
+- You'll lose access to your existing project memberships
+- Each new directory creates a new session identity
+- Multi-project workflows will fail
 
 ### Workflow
 
@@ -764,18 +803,27 @@ status({
 **Response:**
 ```json
 {
+  "client_id": "b8f3a2c9d1e6f4a5",
   "working_directory": "/Users/you/frontend-app",
+  "identity_reminder": [
+    "📛 In project \"API Redesign Sprint\" (api-redesign): YOU are the \"frontend\" agent with the \"coordinator\" role",
+    "📛 In project \"Platform Documentation\" (platform-docs): YOU are the \"frontend\" agent with the \"contributor\" role"
+  ],
   "projects": [
     {
       "project_id": "api-redesign",
       "agent_name": "frontend",
       "project_name": "API Redesign Sprint",
+      "role": "coordinator",
+      "role_description": "YOUR ROLE: As coordinator agent, you facilitate human-in-the-loop approval. You present contributor work to humans, await their signoff, then relay decisions back to contributors. Never accept work without human approval first!",
       "unread_messages": 2
     },
     {
       "project_id": "platform-docs",
       "agent_name": "frontend",
       "project_name": "Platform Documentation",
+      "role": "contributor",
+      "role_description": "YOUR ROLE: As contributor agent, you complete assigned work and send handoff messages to the coordinator when ready for human review.",
       "unread_messages": 0
     }
   ],
@@ -1002,7 +1050,7 @@ get_resource({
 
 1. **MCP Protocol Layer** (`src/server.ts`)
    - Implements MCP server over stdio transport
-   - Exposes 18 tools for project cooperation (v0.9.0+, with coordinator handover)
+   - Exposes 19 tools for project cooperation (v0.10.0+, with coordinator handover)
    - Provides 10 context-aware prompts for guided workflows
    - Handles request validation and error responses
    - Enforces coordinator pattern for human-in-the-loop workflows

@@ -173,9 +173,9 @@ import type {
  */
 function getRoleDescription(role?: string): string {
   if (role === 'coordinator') {
-    return 'Coordinator - You facilitate human-in-the-loop approval. Present contributor work to humans for approval/rejection.';
+    return 'YOUR ROLE: As coordinator agent, you facilitate human-in-the-loop approval. You present contributor work to humans, await their signoff, then relay decisions back to contributors. Never accept work without human approval first!';
   }
-  return 'Contributor - Complete assigned work and send handoff messages to coordinator when done.';
+  return 'YOUR ROLE: As contributor agent, you complete assigned work and send handoff messages to the coordinator when ready for human review.';
 }
 
 /**
@@ -1116,6 +1116,9 @@ export class AgentCoopServer {
 
             await this.storage.joinProject(member);
 
+            // Ensure project has coordinator (v0.10.0 migration - backfills for legacy projects)
+            await this.storage.ensureProjectHasCoordinator(projectId);
+
             // Use project metadata from earlier (already fetched for coordinator check)
             const projectName = projectMetadata?.name || projectId;
 
@@ -1131,15 +1134,15 @@ export class AgentCoopServer {
               details: { agent_id: member.agent_id, client_id: clientId, working_directory: workingDirectory }
             });
 
-            // Determine role and provide appropriate guidance
+            // Determine role and provide appropriate guidance - emphasize agent identity
             const assignedRole = labels.role || 'contributor';
             const isCoordinator = assignedRole === 'coordinator';
 
             let roleMessage: string;
             if (isCoordinator) {
-              roleMessage = '✅ Joined as COORDINATOR. You facilitate human-in-the-loop approval: present contributor work to humans, await signoff, relay decisions. Use handover_coordinator tool to transfer role if needed.';
+              roleMessage = `✅ YOU are now the "${agentName}" agent with the COORDINATOR role in this project. You facilitate human-in-the-loop approval: present contributor work to humans, await signoff, relay decisions. Use handover_coordinator tool to transfer role if needed.`;
             } else {
-              roleMessage = '✅ Joined as CONTRIBUTOR. Complete assigned work and send handoff messages to coordinator when done. Wait for coordinator approval before leaving discussion.';
+              roleMessage = `✅ YOU are now the "${agentName}" agent with the CONTRIBUTOR role in this project. Complete assigned work and send handoff messages to coordinator when done. Wait for coordinator approval before leaving discussion.`;
             }
 
             return {
@@ -1148,6 +1151,7 @@ export class AgentCoopServer {
                 text: JSON.stringify({
                   success: true,
                   working_directory: workingDirectory,
+                  critical_reminder: '⚠️ CRITICAL: For ALL future Brainstorm tool calls (leave_project, status, etc.), ALWAYS use the initial "Working directory" value from your <env> block (shown at conversation start). NEVER use current PWD or values from tool responses. Session persistence depends on using the exact same directory consistently throughout your conversation.',
                   agent_name: member.agent_name,
                   agent_id: member.agent_id,
                   role: assignedRole,
@@ -1197,13 +1201,19 @@ export class AgentCoopServer {
                 while (Date.now() - startTime < timeoutMs) {
                   const metadata = await this.storage.getProjectMetadata(projectId);
                   if (metadata) {
+                    // Ensure project has coordinator (v0.10.0 migration)
+                    await this.storage.ensureProjectHasCoordinator(projectId);
+
                     const members = await this.storage.listProjectMembers(projectId);
+                    // Find the coordinator (member with labels.role === 'coordinator')
+                    const coordinator = members.find(m => m.labels?.role === 'coordinator');
                     return {
                       content: [{
                         type: 'text',
                         text: JSON.stringify({
                           project: metadata,
                           members: members,
+                          coordinator: coordinator?.agent_name || null,
                           waited_ms: Date.now() - startTime
                         }, null, 2)
                       }]
@@ -1249,14 +1259,20 @@ export class AgentCoopServer {
               };
             }
 
+            // Ensure project has coordinator (v0.10.0 migration)
+            await this.storage.ensureProjectHasCoordinator(projectId);
+
             const members = await this.storage.listProjectMembers(projectId);
+            // Find the coordinator (member with labels.role === 'coordinator')
+            const coordinator = members.find(m => m.labels?.role === 'coordinator');
 
             return {
               content: [{
                 type: 'text',
                 text: JSON.stringify({
                   project: metadata,
-                  members: members
+                  members: members,
+                  coordinator: coordinator?.agent_name || null
                 }, null, 2)
               }]
             };
@@ -1327,6 +1343,58 @@ export class AgentCoopServer {
               };
             }
 
+            // Get sender's role for validation and response guidance
+            const sender = await this.storage.getProjectMember(projectId, fromAgent);
+            const senderRole = sender?.labels?.role || 'contributor';
+
+            // Validate handoff message authority based on sender role
+            const payload = args.payload as Record<string, unknown>;
+            const metadata = args.metadata as Record<string, unknown> | undefined;
+            const isHandoffMessage =
+              payload?.type === 'handoff' ||
+              payload?.type === 'handoff_accepted' ||
+              payload?.type === 'handoff_rejected' ||
+              metadata?.message_type === 'handoff_to_coordinator';
+
+            if (isHandoffMessage) {
+              // Validation rules:
+              // - Contributors can ONLY send 'handoff' messages
+              // - Coordinators can ONLY send 'handoff_accepted' or 'handoff_rejected' messages
+              if (senderRole === 'contributor') {
+                if (payload?.type === 'handoff_accepted' || payload?.type === 'handoff_rejected') {
+                  return {
+                    content: [{
+                      type: 'text',
+                      text: JSON.stringify({
+                        error: 'HANDOFF_AUTHORITY_ERROR',
+                        message: `YOU are a contributor agent. Contributors cannot send "${payload?.type}" messages - only coordinators can approve/reject work.`,
+                        your_role: 'contributor',
+                        allowed_handoff_types: ['handoff'],
+                        details: 'Send handoff messages to the coordinator when your work is ready for human review. The coordinator will handle approval/rejection.'
+                      }, null, 2)
+                    }],
+                    isError: true
+                  };
+                }
+              } else if (senderRole === 'coordinator') {
+                if (payload?.type === 'handoff' || metadata?.message_type === 'handoff_to_coordinator') {
+                  return {
+                    content: [{
+                      type: 'text',
+                      text: JSON.stringify({
+                        error: 'HANDOFF_AUTHORITY_ERROR',
+                        message: 'YOU are the coordinator agent. Coordinators do not send handoff messages - those come from contributors.',
+                        your_role: 'coordinator',
+                        allowed_handoff_types: ['handoff_accepted', 'handoff_rejected'],
+                        details: 'As coordinator, you receive handoff messages from contributors, present their work to humans, then relay the decision via handoff_accepted or handoff_rejected.'
+                      }, null, 2)
+                    }],
+                    isError: true
+                  };
+                }
+              }
+            }
+
             const message: Message = {
               message_id: randomUUID(),
               project_id: projectId,
@@ -1341,6 +1409,9 @@ export class AgentCoopServer {
 
             await this.storage.sendMessage(message);
 
+            // Ensure project has coordinator (v0.10.0 migration)
+            await this.storage.ensureProjectHasCoordinator(projectId);
+
             await this.storage.auditLog({
               timestamp: new Date().toISOString(),
               actor: fromAgent,
@@ -1349,13 +1420,68 @@ export class AgentCoopServer {
               details: { project_id: projectId, message_id: message.message_id }
             });
 
+            // Provide confirmation guidance for handoff messages (payload/metadata/isHandoffMessage already extracted above for validation)
+            const response: Record<string, unknown> = {
+              success: true,
+              message_id: message.message_id,
+              role_reminder: {
+                your_role: senderRole,
+                your_agent_name: fromAgent,
+                role_description: getRoleDescription(senderRole)
+              }
+            };
+
+            if (isHandoffMessage) {
+              if (payload?.type === 'handoff' || metadata?.message_type === 'handoff_to_coordinator') {
+                // Contributor sending handoff to coordinator
+                response.handoff_detected = {
+                  type: 'handoff_to_coordinator',
+                  message: '✅ Handoff message sent to coordinator',
+                  next_steps: [
+                    'You MUST now call receive_messages with wait=true to wait for coordinator response',
+                    'The coordinator will present your work to the human user for approval',
+                    'Wait for either handoff_accepted (approved) or handoff_rejected (needs revision)'
+                  ],
+                  reminder: 'Do NOT leave the discussion until you receive coordinator approval'
+                };
+              } else if (payload?.type === 'handoff_accepted') {
+                // Coordinator accepting handoff
+                response.handoff_detected = {
+                  type: 'handoff_accepted',
+                  message: '✅ Handoff acceptance sent to contributor',
+                  reminder: 'This should only be sent AFTER receiving human user approval'
+                };
+              } else if (payload?.type === 'handoff_rejected') {
+                // Coordinator rejecting handoff
+                response.handoff_detected = {
+                  type: 'handoff_rejected',
+                  message: '✅ Handoff rejection sent to contributor with feedback',
+                  reminder: 'Make sure you included specific human feedback in the message for the contributor to act on'
+                };
+              }
+            }
+
+            // Add wait guidance for reply_expected messages
+            if (replyExpected) {
+              response.reply_expected_guidance = {
+                message: '⏳ You set reply_expected=true - you MUST now wait for a response',
+                action_required: 'Call receive_messages with wait=true to wait for the recipient\'s reply',
+                recommended_timeout: 300,
+                timeout_note: 'Wait at least 300 seconds (5 minutes) - this is the default long-polling timeout. You can specify timeout_seconds up to 3600 (1 hour) if needed.'
+              };
+            }
+
+            // Always include conversation etiquette reminder
+            response.conversation_etiquette = {
+              message: '🤝 Conversation Etiquette',
+              reminder: 'Before leaving this conversation, confirm with the recipient that they have nothing more to discuss',
+              best_practice: 'Send a closing message like "Is there anything else you need from me?" and wait for confirmation before concluding'
+            };
+
             return {
               content: [{
                 type: 'text',
-                text: JSON.stringify({
-                  success: true,
-                  message_id: message.message_id
-                }, null, 2)
+                text: JSON.stringify(response, null, 2)
               }]
             };
           }
@@ -1402,19 +1528,68 @@ export class AgentCoopServer {
                 while (Date.now() - startTime < timeoutMs) {
                   const messages = await this.storage.getAgentInbox(projectId, agentName, offset, limit);
                   if (messages.length > 0) {
+                    // Ensure project has coordinator (v0.10.0 migration)
+                    await this.storage.ensureProjectHasCoordinator(projectId);
+
+                    // Detect handoff messages and provide role-specific guidance
+                    const handoffAlerts: Array<Record<string, unknown>> = [];
+                    for (const msg of messages) {
+                      const payload = msg.payload as Record<string, unknown>;
+                      const metadata = msg.metadata as Record<string, unknown> | undefined;
+
+                      if (payload?.type === 'handoff' || metadata?.message_type === 'handoff_to_coordinator') {
+                        handoffAlerts.push({
+                          message_id: msg.message_id,
+                          from: msg.from_agent,
+                          type: 'handoff_to_coordinator',
+                          alert: '📬 HANDOFF RECEIVED: A contributor has completed their work and is waiting for your approval',
+                          coordinator_action_required: [
+                            '1. Review the contributor\'s work summary in the message payload',
+                            '2. MUST present this work to the HUMAN user for review',
+                            '3. MUST wait for HUMAN approval or rejection',
+                            '4. Send handoff_accepted (if human approves) or handoff_rejected with human feedback (if human rejects)',
+                            '5. Use send_message to relay the human decision back to the contributor'
+                          ],
+                          critical_reminder: 'You are a PROXY for human decisions. Never accept work without human approval first!'
+                        });
+                      } else if (payload?.type === 'handoff_accepted') {
+                        handoffAlerts.push({
+                          message_id: msg.message_id,
+                          from: msg.from_agent,
+                          type: 'handoff_accepted',
+                          alert: '✅ WORK APPROVED: The coordinator (via human user) has approved your completed work',
+                          contributor_action: 'Your work is complete and approved. You may now conclude your contribution to this project.'
+                        });
+                      } else if (payload?.type === 'handoff_rejected') {
+                        handoffAlerts.push({
+                          message_id: msg.message_id,
+                          from: msg.from_agent,
+                          type: 'handoff_rejected',
+                          alert: '🔄 REVISION REQUESTED: The human user (via coordinator) has requested changes',
+                          contributor_action: 'Review the human feedback in the message, make the requested changes, then send a new handoff message to the coordinator'
+                        });
+                      }
+                    }
+
+                    const response: Record<string, unknown> = {
+                      messages,
+                      count: messages.length,
+                      waited_ms: Date.now() - startTime,
+                      pagination: {
+                        offset: offset || 0,
+                        limit: limit,
+                        returned: messages.length
+                      }
+                    };
+
+                    if (handoffAlerts.length > 0) {
+                      response.handoff_alerts = handoffAlerts;
+                    }
+
                     return {
                       content: [{
                         type: 'text',
-                        text: JSON.stringify({
-                          messages,
-                          count: messages.length,
-                          waited_ms: Date.now() - startTime,
-                          pagination: {
-                            offset: offset || 0,
-                            limit: limit,
-                            returned: messages.length
-                          }
-                        }, null, 2)
+                        text: JSON.stringify(response, null, 2)
                       }]
                     };
                   }
@@ -1454,18 +1629,67 @@ export class AgentCoopServer {
             // Standard non-blocking fetch
             const messages = await this.storage.getAgentInbox(projectId, agentName, offset, limit);
 
+            // Ensure project has coordinator (v0.10.0 migration)
+            await this.storage.ensureProjectHasCoordinator(projectId);
+
+            // Detect handoff messages and provide role-specific guidance
+            const handoffAlerts: Array<Record<string, unknown>> = [];
+            for (const msg of messages) {
+              const payload = msg.payload as Record<string, unknown>;
+              const metadata = msg.metadata as Record<string, unknown> | undefined;
+
+              if (payload?.type === 'handoff' || metadata?.message_type === 'handoff_to_coordinator') {
+                handoffAlerts.push({
+                  message_id: msg.message_id,
+                  from: msg.from_agent,
+                  type: 'handoff_to_coordinator',
+                  alert: '📬 HANDOFF RECEIVED: A contributor has completed their work and is waiting for your approval',
+                  coordinator_action_required: [
+                    '1. Review the contributor\'s work summary in the message payload',
+                    '2. MUST present this work to the HUMAN user for review',
+                    '3. MUST wait for HUMAN approval or rejection',
+                    '4. Send handoff_accepted (if human approves) or handoff_rejected with human feedback (if human rejects)',
+                    '5. Use send_message to relay the human decision back to the contributor'
+                  ],
+                  critical_reminder: 'You are a PROXY for human decisions. Never accept work without human approval first!'
+                });
+              } else if (payload?.type === 'handoff_accepted') {
+                handoffAlerts.push({
+                  message_id: msg.message_id,
+                  from: msg.from_agent,
+                  type: 'handoff_accepted',
+                  alert: '✅ WORK APPROVED: The coordinator (via human user) has approved your completed work',
+                  contributor_action: 'Your work is complete and approved. You may now conclude your contribution to this project.'
+                });
+              } else if (payload?.type === 'handoff_rejected') {
+                handoffAlerts.push({
+                  message_id: msg.message_id,
+                  from: msg.from_agent,
+                  type: 'handoff_rejected',
+                  alert: '🔄 REVISION REQUESTED: The human user (via coordinator) has requested changes',
+                  contributor_action: 'Review the human feedback in the message, make the requested changes, then send a new handoff message to the coordinator'
+                });
+              }
+            }
+
+            const response: Record<string, unknown> = {
+              messages,
+              count: messages.length,
+              pagination: {
+                offset: offset || 0,
+                limit: limit,
+                returned: messages.length
+              }
+            };
+
+            if (handoffAlerts.length > 0) {
+              response.handoff_alerts = handoffAlerts;
+            }
+
             return {
               content: [{
                 type: 'text',
-                text: JSON.stringify({
-                  messages,
-                  count: messages.length,
-                  pagination: {
-                    offset: offset || 0,
-                    limit: limit,
-                    returned: messages.length
-                  }
-                }, null, 2)
+                text: JSON.stringify(response, null, 2)
               }]
             };
           }
@@ -1750,9 +1974,25 @@ export class AgentCoopServer {
                 text: JSON.stringify({
                   success: true,
                   project_id: projectId,
-                  from_agent: fromAgent,
-                  to_agent: toAgent,
-                  message: `Coordinator role successfully transferred from ${fromAgent} to ${toAgent}`
+                  message: `✅ Coordinator role successfully transferred from "${fromAgent}" to "${toAgent}"`,
+                  role_changes: {
+                    [fromAgent]: {
+                      old_role: 'coordinator',
+                      new_role: 'contributor',
+                      guidance: getRoleDescription('contributor'),
+                      note: `YOU (${fromAgent}) are no longer the coordinator. YOU are now a contributor agent. Complete assigned work and send handoff messages to the new coordinator "${toAgent}" when done.`
+                    },
+                    [toAgent]: {
+                      old_role: 'contributor',
+                      new_role: 'coordinator',
+                      guidance: getRoleDescription('coordinator'),
+                      note: `YOU (${toAgent}) are now the coordinator agent. CRITICAL: YOU are the human's PROXY for approvals. Present contributor work to the human user, await their signoff, then relay their decision. Never accept work without human approval first!`
+                    }
+                  },
+                  next_steps: {
+                    for_previous_coordinator: `You (${fromAgent}) can now focus on contributor work or leave the project if done.`,
+                    for_new_coordinator: `You (${toAgent}) should acknowledge this handover and check for any pending handoff messages from contributors.`
+                  }
                 }, null, 2)
               }]
             };
@@ -1842,6 +2082,9 @@ export class AgentCoopServer {
 
             for (const membership of memberships) {
               try {
+                // Ensure project has coordinator (v0.10.0 migration)
+                await this.storage.ensureProjectHasCoordinator(membership.project_id);
+
                 const messages = await this.storage.getAgentInbox(membership.project_id, membership.agent_name);
                 const member = await this.storage.getProjectMember(membership.project_id, membership.agent_name);
 
@@ -1865,14 +2108,34 @@ export class AgentCoopServer {
               }
             }
 
+            // Build identity reminder - emphasize agent identity
+            const identityReminder = projectStatuses.map(p =>
+              `📛 In project "${p.project_name}" (${p.project_id}): YOU (${p.agent_name}) are the ${p.role} agent`
+            );
+
+            // Build agent-centric status message
+            const totalUnread = projectStatuses.reduce((sum, p) => sum + p.unread_messages, 0);
+            const agentStatusMessage = projectStatuses.length === 0
+              ? '🤖 AGENT STATUS: You are not currently a member of any Brainstorm projects'
+              : totalUnread === 0
+              ? `🤖 AGENT STATUS: You are a member of ${projectStatuses.length} project(s) with no unread messages`
+              : `🤖 AGENT STATUS: YOU have ${totalUnread} unread message(s) across ${projectStatuses.length} project(s)`;
+
             return {
               content: [{
                 type: 'text',
                 text: JSON.stringify({
+                  agent_status_message: agentStatusMessage,
+                  client_id: clientId,
                   working_directory: workingDirectory,
+                  critical_reminder: '⚠️ CRITICAL: For ALL Brainstorm tool calls requiring working_directory parameter, ALWAYS use the initial "Working directory" value from your <env> block (shown at conversation start). NEVER use current PWD, shell working directory, or values from tool responses. Session persistence depends on using the exact same directory consistently throughout your conversation.',
+                  identity_reminder: identityReminder.length > 0
+                    ? identityReminder
+                    : ['You are not currently a member of any projects'],
                   projects: projectStatuses,
                   total_projects: projectStatuses.length,
-                  total_unread_messages: projectStatuses.reduce((sum, p) => sum + p.unread_messages, 0)
+                  total_unread_messages: totalUnread,
+                  interpretation_guide: '📖 The data above shows YOUR status as an agent. When you see "unread_messages: N", these are messages in YOUR inbox. When you see project memberships, these are projects YOU are a member of. You are not reporting on a human user - you ARE the project member.'
                 }, null, 2)
               }]
             };
@@ -1919,6 +2182,43 @@ export class AgentCoopServer {
             // Resolve client_id (env var or directory-based generation)
             const clientId = resolveClientId(workingDirectory);
 
+            // Check if leaving agent is the coordinator - HARD BLOCK if so
+            const member = await this.storage.getProjectMember(projectId, agentName);
+            const isCoordinator = member?.labels?.role === 'coordinator';
+
+            // HARD BLOCK: Coordinators must handover before leaving
+            if (isCoordinator) {
+              // Get other members for handover suggestion
+              const members = await this.storage.listProjectMembers(projectId);
+              const otherMembers = members.filter(m => m.agent_name !== agentName);
+
+              return {
+                content: [{
+                  type: 'text',
+                  text: JSON.stringify({
+                    error: 'COORDINATOR_HANDOVER_REQUIRED',
+                    message: 'YOU cannot leave while YOU are the coordinator. YOU must use handover_coordinator to transfer the coordinator role to another member first.',
+                    your_role: 'coordinator',
+                    required_action: {
+                      tool: 'handover_coordinator',
+                      parameters: {
+                        project_id: projectId,
+                        from_agent: agentName,
+                        to_agent: '<choose-a-member>'
+                      }
+                    },
+                    available_members: otherMembers.map(m => ({
+                      agent_name: m.agent_name,
+                      online: m.online,
+                      last_seen: m.last_seen
+                    })),
+                    why: 'The coordinator role is essential for human-in-the-loop approval. Without a coordinator, contributors cannot get their work approved. You must transfer this responsibility before leaving.'
+                  }, null, 2)
+                }],
+                isError: true
+              };
+            }
+
             // Leave the project (archives messages, removes membership)
             const archivedCount = await this.storage.leaveProject(projectId, agentName, clientId);
 
@@ -1927,9 +2227,10 @@ export class AgentCoopServer {
               actor: agentName,
               action: 'leave_project',
               target: projectId,
-              details: { client_id: clientId, archived_messages: archivedCount }
+              details: { client_id: clientId, archived_messages: archivedCount, was_coordinator: false } // Always false since coordinators are blocked above
             });
 
+            // Build simple success response (coordinators are blocked above, so this is always a regular member)
             return {
               content: [{
                 type: 'text',
@@ -2218,13 +2519,19 @@ ${projectList}
 **The review will show:**
 - 📋 Project overview (name, description, created date)
 - 👥 Team members (who's online, when they joined)
+- 🎯 **Coordinator** (who is responsible for human-in-the-loop approval - look for labels.role === 'coordinator')
 - 📬 Your unread messages (recent messages with previews)
 - 📦 Available resources (shared documents and data)
 
 **I'll use these tools:**
-- \`get_project_info\` for project details and members
+- \`get_project_info\` for project details, members, and coordinator identification
 - \`receive_messages\` for your inbox
-- \`list_resources\` for shared resources`
+- \`list_resources\` for shared resources
+
+**IMPORTANT - Coordinator Role:**
+- The coordinator field from \`get_project_info\` shows who facilitates human approvals
+- If you're a contributor, send handoff messages to the coordinator when work is complete
+- If you're the coordinator, you MUST present contributor work to humans before accepting`
                   }
                 }
               ]
@@ -2446,6 +2753,7 @@ The tool will show you all projects you've joined from this directory, including
 **First, let me check your current status:**
 1. Read your working directory from \`<env>\` (look for "Working directory:")
 2. Use the \`status\` tool to see which projects you're currently in
+3. Check your role in each project (coordinator vs contributor)
 
 **Then:**
 - If you're in exactly 1 project → I'll confirm which project and your agent name, then leave
@@ -2456,11 +2764,25 @@ The tool will show you all projects you've joined from this directory, including
 - Which project do you want to leave? (provide the project_id)
 - What's your agent name in that project?
 
+**CRITICAL - If You Are the Coordinator:**
+⚠️ **You MUST hand over the coordinator role before leaving!**
+1. First, use \`get_project_info\` to see all project members
+2. Choose a member to become the new coordinator
+3. Use \`handover_coordinator\` to transfer the role to them
+4. Only AFTER the handover is complete, use \`leave_project\`
+
+**Why this matters:**
+- The coordinator role is essential for the human-in-the-loop approval workflow
+- Without a coordinator, contributors cannot get human approval for their completed work
+- The project will be left in a broken state if the coordinator leaves without handover
+
 **I'll then:**
-1. Use \`leave_project\` with your project_id, agent_name, and working_directory
-2. Your unread messages will be archived (preserved in an archive/ folder)
-3. Your project membership will be removed from the client membership tracking
-4. You'll receive a summary of how many messages were archived
+1. Check if you're the coordinator (via \`status\` tool role field)
+2. If coordinator: REQUIRE handover first (abort leave if not done)
+3. If contributor or after handover: Use \`leave_project\` with your project_id, agent_name, and working_directory
+4. Your unread messages will be archived (preserved in an archive/ folder)
+5. Your project membership will be removed from the client membership tracking
+6. You'll receive a summary of how many messages were archived
 
 **Note**: You can rejoin the project later using the same agent name (session persistence lets you reclaim it).`
                   }

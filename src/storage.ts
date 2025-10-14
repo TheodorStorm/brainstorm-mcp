@@ -1108,6 +1108,80 @@ export class FileSystemStorage {
     }
   }
 
+  /**
+   * Ensures project has a coordinator by backfilling role to creator if missing (v0.10.0 migration).
+   *
+   * This migration provides backward compatibility for projects created before v0.10.0,
+   * where coordinators were not automatically assigned. Safe to call repeatedly - the
+   * operation is idempotent and only assigns coordinator if all conditions are met.
+   *
+   * **Migration Conditions:**
+   * - Project has a created_by field (identifies creator)
+   * - Creator is currently a project member
+   * - Creator's member record has no role label yet
+   * - No other member currently has coordinator role
+   *
+   * **When Called:**
+   * Automatically invoked by these tool handlers on first project access:
+   * - get_project_info (most common read operation)
+   * - join_project (when any agent joins)
+   * - send_message (when any agent sends messages)
+   * - receive_messages (when any agent checks inbox)
+   *
+   * **Performance:**
+   * - Fast existence check that short-circuits if coordinator exists
+   * - No lock required (writes are idempotent, single coordinator enforcement in joinProject)
+   * - Minimal overhead for all projects (just member list scan + role check)
+   *
+   * @param projectId - Project to check and migrate
+   *
+   * @returns Promise that resolves when migration check completes (no return value)
+   * @throws {ValidationError} If projectId contains unsafe characters
+   *
+   * @example
+   * ```typescript
+   * // Called automatically from tool handlers
+   * await this.storage.ensureProjectHasCoordinator('api-redesign');
+   *
+   * // Migration scenarios:
+   * // 1. Project has coordinator → no-op (short circuit)
+   * // 2. Creator not yet member → no-op (wait for join)
+   * // 3. Creator member without role → backfill coordinator role
+   * // 4. Project has no creator → no-op (safety - no action)
+   * ```
+   */
+  async ensureProjectHasCoordinator(projectId: string): Promise<void> {
+    this.assertSafeId(projectId, 'project_id');
+
+    const metadata = await this.getProjectMetadata(projectId);
+    if (!metadata || !metadata.created_by) return; // No creator = nothing to migrate
+
+    const members = await this.listProjectMembers(projectId);
+
+    // Check if coordinator already exists (fast path - most common case post-migration)
+    const hasCoordinator = members.some(m => m.labels?.role === 'coordinator');
+    if (hasCoordinator) return; // Already has coordinator - no migration needed
+
+    // Find creator member
+    const creatorMember = members.find(m => m.agent_name === metadata.created_by);
+    if (!creatorMember) return; // Creator not a member yet - wait for them to join
+
+    // Backfill coordinator role to creator (if they don't already have a role)
+    if (!creatorMember.labels?.role) {
+      creatorMember.labels = { ...creatorMember.labels, role: 'coordinator' };
+
+      const memberPath = path.join(
+        this.root,
+        'projects',
+        projectId,
+        'members',
+        `${creatorMember.agent_name}.json`
+      );
+
+      await this.atomicWrite(memberPath, JSON.stringify(creatorMember, null, 2));
+    }
+  }
+
   // ============================================================================
   // Messaging operations
   // ============================================================================
