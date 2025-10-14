@@ -380,8 +380,8 @@ export interface StoredResourceManifest extends ResourceManifest {
  *   heartbeat_timeout_seconds: 300,
  *   lock_stale_timeout_ms: 30000,
  *   max_resource_size_bytes: 512000,
- *   max_long_poll_timeout_seconds: 900,
- *   default_long_poll_timeout_seconds: 90
+ *   max_long_poll_timeout_seconds: 3600,
+ *   default_long_poll_timeout_seconds: 300
  * }
  */
 export interface SystemConfig {

@@ -18,6 +18,104 @@
  * - Long-polling support for real-time collaboration
  * - DoS protection for concurrent requests
  *
+ * **Coordinator Pattern (Human-in-the-Loop):**
+ * - Each project has ONE coordinator (enforced via storage validation)
+ * - Project creator automatically becomes coordinator (labels.role = 'coordinator')
+ * - **CRITICAL**: Coordinator is a PROXY for human approval, NOT an autonomous decision-maker
+ * - Contributors MUST hand off to coordinator before leaving discussion
+ * - Coordinator MUST present work to human, await signoff, THEN respond to contributors
+ *
+ * **Handoff Workflow (Human-Approved):**
+ *
+ * **Contributors** complete work and hand off:
+ * 1. Send handoff message to coordinator (find via get_project_info, look for labels.role === 'coordinator')
+ * 2. Set payload.type = 'handoff'
+ * 3. Set metadata.message_type = 'handoff_to_coordinator'
+ * 4. Include summary of completed work in payload.summary
+ * 5. Set reply_expected = TRUE (handoff requires coordinator acceptance)
+ * 6. MUST call receive_messages with wait=true to wait for coordinator's response
+ *
+ * **Coordinators** review and facilitate human approval:
+ * 1. Receive handoff from contributor
+ * 2. **MUST present work to HUMAN user for review** (this is your primary responsibility!)
+ * 3. **MUST wait for HUMAN signoff** (approval or rejection with feedback)
+ * 4. Based on HUMAN decision:
+ *    - **If human approves**: Send acceptance (payload.type = 'handoff_accepted') to contributor
+ *    - **If human rejects**: Send rejection (payload.type = 'handoff_rejected') with human feedback to contributor
+ * 5. If rejected, contributor revises and sends new handoff (repeat from step 1)
+ *
+ * Example handoff message from contributor:
+ * ```typescript
+ * {
+ *   to_agent: "coordinator-name",
+ *   payload: {
+ *     type: "handoff",
+ *     summary: "Completed frontend implementation. All tests passing.",
+ *     details: { ... }
+ *   },
+ *   metadata: {
+ *     message_type: "handoff_to_coordinator",
+ *     priority: "high"
+ *   },
+ *   reply_expected: true  // MUST wait for coordinator acceptance!
+ * }
+ * ```
+ *
+ * Example coordinator acceptance (AFTER human approval):
+ * ```typescript
+ * {
+ *   to_agent: "contributor-name",
+ *   payload: {
+ *     type: "handoff_accepted",
+ *     message: "Human user has approved your work. Great job!"
+ *   },
+ *   reply_expected: false
+ * }
+ * ```
+ *
+ * Example coordinator rejection (based on human feedback):
+ * ```typescript
+ * {
+ *   to_agent: "contributor-name",
+ *   payload: {
+ *     type: "handoff_rejected",
+ *     message: "Human user requests changes: [specific feedback from human]",
+ *     human_feedback: "The API response format needs to include error codes"
+ *   },
+ *   reply_expected: false
+ * }
+ * ```
+ *
+ * **Coordinator Role Handover (v0.9.0+):**
+ * Coordinators can transfer their role to another project member for smooth leadership transitions:
+ * - Use the `handover_coordinator` tool to transfer the coordinator role
+ * - Only the current coordinator can initiate a handover
+ * - Target agent must already be a member of the project
+ * - Operation is atomic (uses project-wide lock to prevent race conditions)
+ * - Handover is audited for accountability
+ *
+ * Example coordinator handover:
+ * ```typescript
+ * // Coordinator transfers role to another team member
+ * handover_coordinator({
+ *   project_id: "api-redesign",
+ *   from_agent: "coordinator-name",  // Current coordinator
+ *   to_agent: "new-coordinator-name" // Target project member
+ * });
+ * // Result: coordinator role removed from from_agent, added to to_agent
+ * ```
+ *
+ * **Use Cases for Handover:**
+ * - Original coordinator needs to step away from the project
+ * - Transitioning leadership to a more appropriate team member
+ * - Coordinating handoff at project phase boundaries
+ * - Ensuring continuous coordination when team composition changes
+ *
+ * **Working Directory Isolation (File Sharing):**
+ * - Each agent has its own working directory - agents CANNOT access each other's local files
+ * - ❌ Wrong: Responding "See /Users/alice/docs/api.md" (other agents cannot read this)
+ * - ✅ Right: Read file locally → `store_resource` (creates shared resource) → share resource_id → others use `get_resource`
+ *
  * **Security:**
  * - Path validation (working_directory must be absolute and normalized)
  * - Error sanitization (system errors hidden, user errors preserved)
@@ -431,7 +529,7 @@ export class AgentCoopServer {
         },
         {
           name: 'join_project',
-          description: 'Join a project with a friendly agent name. This is how agents register themselves within a project. Automatically tracks membership by your working directory - no manual storage needed!',
+          description: 'Join a project with agent name. Membership automatically tracked by working directory.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -476,9 +574,9 @@ export class AgentCoopServer {
               },
               timeout_seconds: {
                 type: 'number',
-                description: 'Maximum seconds to wait when wait=true (default: 90, max: 900)',
+                description: 'Maximum seconds to wait when wait=true (default: 300, max: 3600)',
                 minimum: 1,
-                maximum: 900
+                maximum: 3600
               }
             },
             required: ['project_id']
@@ -505,7 +603,7 @@ export class AgentCoopServer {
         },
         {
           name: 'send_message',
-          description: 'Send a message to another agent in the project or broadcast to all members. CRITICAL: reply_expected is a commitment - set true ONLY if you will immediately call receive_messages with wait=true to wait for responses. Set false for informational messages.',
+          description: 'Send message to agent or broadcast to all. Set reply_expected=true only if you\'ll immediately wait for responses using receive_messages.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -527,7 +625,7 @@ export class AgentCoopServer {
               },
               reply_expected: {
                 type: 'boolean',
-                description: 'CRITICAL: Set true if your message asks a question or requests action AND you will immediately call receive_messages with wait=true to wait for replies. Set false for informational messages. This is a binding commitment - true means you WILL wait, false means you won\'t.'
+                description: 'Set true if requesting action/question AND you\'ll immediately wait for replies via receive_messages. False for informational messages. True commits you to wait.'
               },
               payload: {
                 type: 'object',
@@ -543,7 +641,7 @@ export class AgentCoopServer {
         },
         {
           name: 'receive_messages',
-          description: 'Get messages from your inbox. Supports pagination for large inboxes and long-polling to wait for new messages. If a message has reply_expected=true, you should send a response back to the sender.',
+          description: 'Get inbox messages. Supports pagination and long-polling. Respond to messages with reply_expected=true.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -570,9 +668,9 @@ export class AgentCoopServer {
               },
               timeout_seconds: {
                 type: 'number',
-                description: 'Maximum seconds to wait for messages when wait=true (default: 90, max: 900)',
+                description: 'Maximum seconds to wait for messages when wait=true (default: 300, max: 3600)',
                 minimum: 1,
-                maximum: 900
+                maximum: 3600
               }
             },
             required: ['project_id', 'agent_name']
@@ -602,7 +700,7 @@ export class AgentCoopServer {
         },
         {
           name: 'store_resource',
-          description: 'Store a shared resource or document in the project. Use "content" for small data (<50KB) or "source_path" for file references (>50KB). Maximum inline content: 50KB. Maximum file size via source_path: 500KB (configurable via BRAINSTORM_MAX_PAYLOAD_SIZE). **FILE REFERENCES**: When you use source_path, that file path is stored in the manifest - other agents must read that source_path to get the content. **For updates:** include the etag you received when you read the resource (pass it back unchanged) to prevent conflicts. Updating the resource increments the etag, signaling to other agents that they must re-read the source_path file.',
+          description: 'Store shared resource. Use content for <50KB, source_path for >50KB (max 500KB). With source_path: path stored in manifest, agents read file directly. For updates: include etag to prevent conflicts.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -663,7 +761,7 @@ export class AgentCoopServer {
         },
         {
           name: 'get_resource',
-          description: 'Retrieve a shared resource from the project. **CRITICAL FILE REFERENCE WORKFLOW**: If the manifest contains `source_path`, the actual content is stored in that file. You MUST use the Read tool on `source_path` to get the content - the `content` field will be undefined. **When checking for updates**: If the manifest `etag` has changed since your last read, you MUST re-read the file at `source_path` because the file content has also changed. Never assume cached file content is still valid after the manifest etag changes. Supports waiting for resource creation.',
+          description: 'Retrieve shared resource. If manifest has source_path: use Read tool on that path (content field undefined). Changed etag means re-read source_path file. Supports long-polling.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -685,9 +783,9 @@ export class AgentCoopServer {
               },
               timeout_seconds: {
                 type: 'number',
-                description: 'Maximum seconds to wait when wait=true (default: 90, max: 900)',
+                description: 'Maximum seconds to wait when wait=true (default: 300, max: 3600)',
                 minimum: 1,
-                maximum: 900
+                maximum: 3600
               }
             },
             required: ['project_id', 'resource_id', 'agent_name']
@@ -763,6 +861,28 @@ export class AgentCoopServer {
               }
             },
             required: ['project_id', 'agent_name']
+          }
+        },
+        {
+          name: 'handover_coordinator',
+          description: 'Transfer coordinator role to another member. Only current coordinator can initiate. Target must be existing member.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              project_id: {
+                type: 'string',
+                description: 'Project containing both agents'
+              },
+              from_agent: {
+                type: 'string',
+                description: 'Current coordinator agent name (must be your agent name)'
+              },
+              to_agent: {
+                type: 'string',
+                description: 'Target agent name to become new coordinator'
+              }
+            },
+            required: ['project_id', 'from_agent', 'to_agent']
           }
         },
         {
@@ -943,13 +1063,23 @@ export class AgentCoopServer {
             // Resolve client_id (env var or directory-based generation)
             const clientId = resolveClientId(workingDirectory);
 
+            // Get project metadata to check if this agent is the creator
+            const projectMetadata = await this.storage.getProjectMetadata(projectId);
+
+            // Automatically assign coordinator role to project creator (backwards compatible)
+            let labels = (args.labels as Record<string, string>) || {};
+            if (projectMetadata && projectMetadata.created_by === agentName && !labels.role) {
+              // Creator joins with coordinator role by default
+              labels = { ...labels, role: 'coordinator' };
+            }
+
             const member: ProjectMember = {
               project_id: projectId,
               agent_name: agentName,
               agent_id: randomUUID(),
               client_id: clientId, // Include client_id for name reclaiming
               capabilities: (args.capabilities as string[]) || [],
-              labels: (args.labels as Record<string, string>) || {},
+              labels: labels,
               joined_at: new Date().toISOString(),
               last_seen: new Date().toISOString(),
               online: true
@@ -957,8 +1087,7 @@ export class AgentCoopServer {
 
             await this.storage.joinProject(member);
 
-            // Get project metadata for the membership record
-            const projectMetadata = await this.storage.getProjectMetadata(projectId);
+            // Use project metadata from earlier (already fetched for coordinator check)
             const projectName = projectMetadata?.name || projectId;
 
             // Store client identity and record membership
@@ -993,8 +1122,8 @@ export class AgentCoopServer {
 
             // Get timeout settings from system config
             const config = await this.storage.getSystemConfig();
-            const defaultTimeout = config?.default_long_poll_timeout_seconds || 90;
-            const maxTimeout = config?.max_long_poll_timeout_seconds || 900;
+            const defaultTimeout = config?.default_long_poll_timeout_seconds || 300;
+            const maxTimeout = config?.max_long_poll_timeout_seconds || 3600;
             const timeoutSeconds = Math.min(args.timeout_seconds as number || defaultTimeout, maxTimeout);
 
             // Long-polling: wait for project to be created
@@ -1048,7 +1177,9 @@ export class AgentCoopServer {
                     text: JSON.stringify({
                       error: 'Project not found',
                       waited_ms: Date.now() - startTime,
-                      timeout: true
+                      timeout: true,
+                      retry: true,
+                      message: 'Long-poll timeout reached. The project was not created within the wait period. You can retry this request to wait again.'
                     })
                   }]
                 };
@@ -1196,8 +1327,8 @@ export class AgentCoopServer {
 
             // Get timeout settings from system config
             const config = await this.storage.getSystemConfig();
-            const defaultTimeout = config?.default_long_poll_timeout_seconds || 90;
-            const maxTimeout = config?.max_long_poll_timeout_seconds || 900;
+            const defaultTimeout = config?.default_long_poll_timeout_seconds || 300;
+            const maxTimeout = config?.max_long_poll_timeout_seconds || 3600;
             const timeoutSeconds = Math.min(args.timeout_seconds as number || defaultTimeout, maxTimeout);
 
             // Long-polling: wait for messages to arrive
@@ -1256,6 +1387,8 @@ export class AgentCoopServer {
                       count: 0,
                       waited_ms: Date.now() - startTime,
                       timeout: true,
+                      retry: true,
+                      message: 'Long-poll timeout reached. No messages arrived within the wait period. You can retry this request to wait again.',
                       pagination: {
                         offset: offset || 0,
                         limit: limit,
@@ -1362,8 +1495,8 @@ export class AgentCoopServer {
 
             // Get timeout settings from system config
             const config = await this.storage.getSystemConfig();
-            const defaultTimeout = config?.default_long_poll_timeout_seconds || 90;
-            const maxTimeout = config?.max_long_poll_timeout_seconds || 900;
+            const defaultTimeout = config?.default_long_poll_timeout_seconds || 300;
+            const maxTimeout = config?.max_long_poll_timeout_seconds || 3600;
             const timeoutSeconds = Math.min(args.timeout_seconds as number || defaultTimeout, maxTimeout);
 
             // Long-polling: wait for resource to be created
@@ -1439,7 +1572,9 @@ export class AgentCoopServer {
                     text: JSON.stringify({
                       error: 'Resource not found',
                       waited_ms: Date.now() - startTime,
-                      timeout: true
+                      timeout: true,
+                      retry: true,
+                      message: 'Long-poll timeout reached. The resource was not created within the wait period. You can retry this request to wait again.'
                     })
                   }]
                 };
@@ -1547,6 +1682,35 @@ export class AgentCoopServer {
                   success: true,
                   agent_name: agentName,
                   online: online
+                }, null, 2)
+              }]
+            };
+          }
+
+          case 'handover_coordinator': {
+            const projectId = args.project_id as string;
+            const fromAgent = args.from_agent as string;
+            const toAgent = args.to_agent as string;
+
+            await this.storage.handoverCoordinator(projectId, fromAgent, toAgent);
+
+            await this.storage.auditLog({
+              timestamp: new Date().toISOString(),
+              actor: fromAgent,
+              action: 'handover_coordinator',
+              target: projectId,
+              details: { from_agent: fromAgent, to_agent: toAgent }
+            });
+
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  success: true,
+                  project_id: projectId,
+                  from_agent: fromAgent,
+                  to_agent: toAgent,
+                  message: `Coordinator role successfully transferred from ${fromAgent} to ${toAgent}`
                 }, null, 2)
               }]
             };
@@ -1815,13 +1979,26 @@ ${existingProjects.length > 0 ? `\n**Existing projects** (${existingProjects.len
 **Then, please ask me:**
 - What should the project be called?
 - What's the goal or purpose?
-- What role will you play? (e.g., "coordinator", "lead", "architect")
 
 **Once I provide this info, you'll:**
 1. Generate a project_id from the name (lowercase, alphanumeric + dashes)
 2. Check if it conflicts with existing projects
-3. Create it with \`create_project\`
-4. Join it automatically with \`join_project\``
+3. Create it with \`create_project\` (set created_by to your agent name)
+4. Join it automatically with \`join_project\`
+
+**IMPORTANT - Coordinator Role (Human-in-the-Loop):**
+- As the project creator, you will automatically become the **coordinator** (labels.role = 'coordinator')
+- Only ONE coordinator is allowed per project (enforced by the system)
+- **CRITICAL**: As coordinator, you are a PROXY for human approval, NOT an autonomous decision-maker
+- Your responsibilities:
+  1. **Receive** handoffs from contributors when they complete work
+  2. **Present** their work to the HUMAN user for review
+  3. **Wait** for HUMAN signoff (approval or rejection with feedback)
+  4. **Relay** human decision back to contributors:
+     - If human approves → send \`handoff_accepted\` to contributor
+     - If human rejects → send \`handoff_rejected\` with human feedback to contributor
+  5. **If needed**: Transfer coordinator role to another member using \`handover_coordinator\` tool
+- **Never accept work without human approval first!**`
                   }
                 }
               ]
@@ -1880,9 +2057,20 @@ ${projectList}
 
 **Once I provide this info, you'll:**
 1. Get detailed project info with \`get_project_info\` to see current members
-2. Suggest available roles based on existing members
-3. Join with \`join_project\`
-4. Check for unread messages with \`receive_messages\``
+2. Check who is the coordinator (look for member with labels.role === 'coordinator')
+3. Suggest available contributor roles based on existing members
+4. Join with \`join_project\` (do NOT set labels.role = 'coordinator' - only one coordinator allowed!)
+5. Check for unread messages with \`receive_messages\`
+
+**IMPORTANT - Contributor Role:**
+- Each project already has ONE coordinator (the creator, unless role was handed over)
+- You are joining as a **contributor**, not the coordinator
+- As a contributor, you are responsible for:
+  - Completing assigned work
+  - Sending handoff messages to the coordinator when work is done
+  - Waiting for coordinator acceptance before leaving the discussion
+  - Making revisions if coordinator requests changes
+- **Note**: If the coordinator transfers their role to you using \`handover_coordinator\`, you will become the new coordinator`
                   }
                 }
               ]
@@ -1912,9 +2100,43 @@ ${projectList}
 - What message do you want to broadcast?
 
 **I'll then:**
-1. Get the project members list
-2. Analyze if your message expects responses (questions, requests, assignments)
-3. Send with \`send_message\` using broadcast=true
+1. Get the project members list with \`get_project_info\`
+2. Check who is the coordinator (labels.role === 'coordinator')
+3. Analyze if your message expects responses (questions, requests, assignments)
+4. Send with \`send_message\` using broadcast=true
+
+**IMPORTANT - File Sharing:**
+- If broadcast mentions files/docs: Use \`store_resource\` first, then broadcast resource_id
+- ❌ Wrong: "/Users/me/api-spec.json" | ✅ Right: "I've shared API spec in resource 'api-spec-v2'"
+
+**IMPORTANT - Coordinator Pattern:**
+- If you are a **contributor** (not coordinator) completing work:
+  - Do NOT broadcast to all members
+  - Instead, send a HANDOFF message directly to the coordinator
+  - See handoff workflow below
+- If you are the **coordinator**, you can broadcast freely
+- **Coordinator Handover**: If you need to transfer coordinator role to another member, use \`handover_coordinator\` tool
+
+**Handoff Workflow (Human-Approved):**
+**Contributors** - when you've completed your work:
+1. Find the coordinator using \`get_project_info\` (look for labels.role === 'coordinator')
+2. Send direct message to coordinator with:
+   - payload.type = 'handoff'
+   - payload.summary = "Brief summary of completed work"
+   - metadata.message_type = 'handoff_to_coordinator'
+   - reply_expected = TRUE
+3. MUST call \`receive_messages\` with wait=true to wait for coordinator's response
+4. Coordinator will present your work to HUMAN user for review
+5. If human approves (payload.type = 'handoff_accepted'), you're done
+6. If human rejects (payload.type = 'handoff_rejected'), make revisions per human feedback and send new handoff
+
+**Coordinators** - when you receive handoff:
+1. Review the contributor's work summary
+2. **MUST present work to HUMAN user** and explain what the contributor accomplished
+3. **MUST wait for HUMAN approval/rejection**
+4. Relay human decision:
+   - If human approves → send \`handoff_accepted\` with message "Human user has approved your work"
+   - If human rejects → send \`handoff_rejected\` with human's specific feedback
 
 **CRITICAL - reply_expected Usage:**
 - Set \`reply_expected: true\` if your broadcast asks a question or requests action from team members
@@ -1986,6 +2208,13 @@ ${projectList}
 - What does it contain? (brief description)
 - Do you have a file path to share, or will you provide inline content?
 
+**CRITICAL - Working Directory Isolation:**
+- Each agent operates in its own working directory - agents CANNOT access each other's files
+- ❌ WRONG: "See the API docs at /Users/alice/docs/api.md" (other agents cannot read this)
+- ✅ RIGHT: Read file locally → \`store_resource\` → share resource_id → others use \`get_resource\`
+- Example response: "I've shared the API docs in resource 'api-documentation' - use get_resource to access it"
+- NEVER respond with local file paths when another agent requests documentation
+
 **I'll then:**
 1. Generate a resource_id from the title
 2. Store it with \`store_resource\` (using source_path for files >50KB, content for smaller data)
@@ -2029,9 +2258,51 @@ When broadcasting the notification about the shared resource:
 
 **I'll then:**
 1. Get recent messages with \`receive_messages\` for context
-2. Determine if this is a reply to someone specific or a general contribution
-3. Analyze if your message expects a response (questions, requests, assignments)
-4. Send your response with \`send_message\` (direct or broadcast as appropriate)
+2. Get project info with \`get_project_info\` to check who is coordinator
+3. Determine if this is a reply to someone specific or a general contribution
+4. Analyze if your message expects a response (questions, requests, assignments)
+5. Send your response with \`send_message\` (direct or broadcast as appropriate)
+
+**IMPORTANT - File Sharing:**
+- If requests documentation/files: Read locally → \`store_resource\` → share resource_id (NOT local paths like "/Users/me/config.json")
+
+**IMPORTANT - Coordinator Pattern (Human-in-the-Loop):**
+- If you are a **contributor** completing work and ready to hand off:
+  - Do NOT just reply with your results
+  - Send a HANDOFF message directly to the coordinator
+  - Coordinator will present your work to HUMAN user
+  - Wait for human approval (via coordinator) before leaving discussion
+- If you are the **coordinator**:
+  - You can discuss freely during the project
+  - When contributors send handoff messages:
+    1. **MUST present their work to HUMAN user** for review
+    2. **MUST wait for HUMAN approval/rejection**
+    3. Relay human decision back to contributor
+  - **You are a PROXY for human decisions, NOT an autonomous decision-maker**
+  - Accept with payload.type = 'handoff_accepted' **ONLY AFTER human approves**
+  - Reject with payload.type = 'handoff_rejected' **with human's specific feedback**
+  - **If needed**: Transfer coordinator role to another member using \`handover_coordinator\` tool
+
+**Handoff Workflow (Human-Approved):**
+**Contributors** - when you've completed your work:
+1. Find the coordinator using \`get_project_info\` (look for labels.role === 'coordinator')
+2. Send direct message to coordinator with:
+   - payload.type = 'handoff'
+   - payload.summary = "Brief summary of completed work"
+   - metadata.message_type = 'handoff_to_coordinator'
+   - reply_expected = TRUE
+3. MUST call \`receive_messages\` with wait=true to wait for coordinator's response
+4. Coordinator will present your work to HUMAN user for review
+5. If human approves (payload.type = 'handoff_accepted'), you're done
+6. If human rejects (payload.type = 'handoff_rejected'), make revisions per human feedback and send new handoff
+
+**Coordinators** - when you receive handoff:
+1. Review the contributor's work summary
+2. **MUST present work to HUMAN user** and explain what the contributor accomplished
+3. **MUST wait for HUMAN approval/rejection**
+4. Relay human decision:
+   - If human approves → send \`handoff_accepted\` with message "Human user has approved your work"
+   - If human rejects → send \`handoff_rejected\` with human's specific feedback
 
 **CRITICAL - reply_expected Usage:**
 - Set \`reply_expected: true\` if your message asks a question or requests action
