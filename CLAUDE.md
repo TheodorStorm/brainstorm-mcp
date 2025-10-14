@@ -178,7 +178,7 @@ claude() {
 
   # If no arguments provided, check Brainstorm status first
   if [ $# -eq 0 ]; then
-    local prompt="CRITICAL: Check Brainstorm status using mcp__brainstorm__status with working_directory set to the EXACT initial 'Working directory' path from the <env> block (shown at conversation start - NOT the current PWD). Show: (1) Your agent name and role (coordinator/contributor) in each project, (2) Unread message counts, (3) Any handoff messages requiring action. If you have unread messages, ask if I want to review them before proceeding with other tasks."
+    local prompt="CRITICAL: You (Claude Code AI assistant) must check if YOU are a member of any Brainstorm projects. The human user is your supervisor, not a project member. Use mcp__brainstorm__status with working_directory set to the EXACT initial 'Working directory' path from the <env> block (shown at conversation start - NOT the current PWD). Report: (1) YOUR agent name and role (coordinator/contributor) in each project YOU are a member of, (2) YOUR unread message counts in YOUR inbox, (3) Any handoff messages directed to YOU. If YOU have unread messages, ask the human supervisor if they want you to review them before proceeding with other tasks."
     command claude "$prompt"
   else
     command claude "$@"
@@ -193,10 +193,14 @@ source ~/.zshrc
 ```
 
 **How it works**:
-- `claude` (no arguments) → Automatically checks Brainstorm status and shows active projects/unread messages
+- `claude` (no arguments) → Claude Code checks **its own** Brainstorm agent status and shows active projects/unread messages in **its** inbox
 - `claude "your prompt"` → Works normally, passes your prompt through unchanged
 
-This ensures you never miss important Brainstorm notifications when starting a new Claude Code session.
+**Role clarity**:
+- **Claude Code (AI assistant)**: The agent that joins Brainstorm projects, receives messages, and has an inbox
+- **Human user**: The supervisor who directs Claude Code's work
+
+This ensures Claude Code never misses important Brainstorm notifications when starting a new session.
 
 ## Version Management
 
