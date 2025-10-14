@@ -21,23 +21,6 @@ Each Claude Code instance (different terminal windows, different projects) can:
 
 All three instances connect to the same Brainstorm server (running on your machine) and can collaborate in shared projects.
 
-### Agent Identity
-
-**IMPORTANT**: Each project's `CLAUDE.md` file should define what agent name that Claude Code instance uses when participating in Brainstorm projects. This allows different projects on your computer to have different identities when collaborating.
-
-Example section to add to your project's CLAUDE.md:
-```markdown
-## Brainstorm Agent Name
-
-When participating in Brainstorm projects, this Claude Code instance identifies as: **frontend-agent**
-
-Use this name for all Brainstorm operations:
-- `join_project` with agent_name: "frontend-agent"
-- `send_message` with from_agent: "frontend-agent"
-- `receive_messages` with agent_name: "frontend-agent"
-- `status` with agent_name: "frontend-agent"
-```
-
 ## Development Commands
 
 ```bash
