@@ -817,29 +817,6 @@ export class FileSystemStorage {
     });
 
     try {
-      // Check if agent is trying to join as coordinator
-      const isCoordinatorRole = member.labels?.role === 'coordinator';
-
-      if (isCoordinatorRole) {
-        // Check if a coordinator already exists in the project
-        const members = await this.listProjectMembers(member.project_id);
-        const existingCoordinator = members.find(m =>
-          m.labels?.role === 'coordinator' && m.agent_name !== member.agent_name
-        );
-
-        if (existingCoordinator) {
-          throw new ConflictError(
-            'Only one coordinator allowed per project. Current coordinator: ' + existingCoordinator.agent_name,
-            'COORDINATOR_EXISTS',
-            {
-              project_id: member.project_id,
-              existing_coordinator: existingCoordinator.agent_name,
-              attempted_by: member.agent_name
-            }
-          );
-        }
-      }
-
       // Check if agent name is already taken
       const existing = await this.getProjectMember(member.project_id, member.agent_name);
 
@@ -980,7 +957,7 @@ export class FileSystemStorage {
   }
 
   /**
-   * Transfers coordinator role from one agent to another atomically.
+   * Transfers coordinator role from one agent to another atomically (v0.11.0).
    *
    * Allows the current coordinator to hand over their coordinator role to another
    * project member. The operation is atomic and uses locking to prevent race conditions.
@@ -991,9 +968,8 @@ export class FileSystemStorage {
    * - Target agent must not already be the coordinator
    *
    * **Atomic Operation:**
-   * - Removes `labels.role = 'coordinator'` from fromAgent
-   * - Adds `labels.role = 'coordinator'` to toAgent
-   * - Both updates happen atomically under a project-wide lock
+   * - Updates `metadata.coordinator_agent` from fromAgent to toAgent
+   * - Single metadata file write under a project-wide lock
    *
    * @param projectId - Project containing both agents
    * @param fromAgent - Current coordinator agent name
@@ -1019,9 +995,9 @@ export class FileSystemStorage {
     this.assertSafeId(fromAgent, 'from_agent');
     this.assertSafeId(toAgent, 'to_agent');
 
-    // Verify project exists
-    const project = await this.getProjectMetadata(projectId);
-    if (!project) {
+    // Verify project exists and get metadata
+    const metadata = await this.getProjectMetadata(projectId);
+    if (!metadata) {
       throw new NotFoundError(
         'Project not found',
         'PROJECT_NOT_FOUND',
@@ -1037,7 +1013,7 @@ export class FileSystemStorage {
     });
 
     try {
-      // Verify both agents exist
+      // Verify both agents exist as project members
       const fromMember = await this.getProjectMember(projectId, fromAgent);
       if (!fromMember) {
         throw new NotFoundError(
@@ -1056,70 +1032,45 @@ export class FileSystemStorage {
         );
       }
 
-      // Verify fromAgent is current coordinator
-      if (fromMember.labels?.role !== 'coordinator') {
+      // Verify fromAgent is current coordinator (check metadata)
+      if (metadata.coordinator_agent !== fromAgent) {
         throw new PermissionError(
           'Access denied: only the current coordinator can hand over the role',
           'NOT_COORDINATOR',
-          { project_id: projectId, requester: fromAgent, current_role: fromMember.labels?.role || 'none' }
+          { project_id: projectId, requester: fromAgent, current_coordinator: metadata.coordinator_agent || 'none' }
         );
       }
 
-      // Verify toAgent is not already coordinator (shouldn't happen, but safety check)
-      if (toMember.labels?.role === 'coordinator') {
+      // Verify toAgent is not already coordinator (safety check - should be redundant)
+      if (metadata.coordinator_agent === toAgent) {
         throw new ConflictError(
-          'Target agent is already a coordinator',
+          'Target agent is already the coordinator',
           'ALREADY_COORDINATOR',
           { project_id: projectId, agent_name: toAgent }
         );
       }
 
-      // Remove coordinator role from fromAgent
-      if (fromMember.labels) {
-        // Create new labels object without coordinator role
-        const { role, ...otherLabels } = fromMember.labels;
-        fromMember.labels = Object.keys(otherLabels).length > 0 ? otherLabels : undefined;
-      }
+      // Transfer coordinator role in metadata
+      metadata.coordinator_agent = toAgent;
 
-      // Add coordinator role to toAgent
-      toMember.labels = { ...toMember.labels, role: 'coordinator' };
-
-      // Update both members atomically
-      const fromMemberPath = path.join(
-        this.root,
-        'projects',
-        projectId,
-        'members',
-        `${fromAgent}.json`
-      );
-
-      const toMemberPath = path.join(
-        this.root,
-        'projects',
-        projectId,
-        'members',
-        `${toAgent}.json`
-      );
-
-      await this.atomicWrite(fromMemberPath, JSON.stringify(fromMember, null, 2));
-      await this.atomicWrite(toMemberPath, JSON.stringify(toMember, null, 2));
+      // Write updated metadata
+      const metadataPath = path.join(this.root, 'projects', projectId, 'metadata.json');
+      await this.atomicWrite(metadataPath, JSON.stringify(metadata, null, 2));
     } finally {
       await unlock();
     }
   }
 
   /**
-   * Ensures project has a coordinator by backfilling role to creator if missing (v0.10.0 migration).
+   * Ensures project has a coordinator by backfilling to metadata if missing (v0.11.0 migration).
    *
-   * This migration provides backward compatibility for projects created before v0.10.0,
-   * where coordinators were not automatically assigned. Safe to call repeatedly - the
+   * This migration provides backward compatibility for projects created before v0.11.0,
+   * where coordinators were not stored in project metadata. Safe to call repeatedly - the
    * operation is idempotent and only assigns coordinator if all conditions are met.
    *
    * **Migration Conditions:**
    * - Project has a created_by field (identifies creator)
-   * - Creator is currently a project member
-   * - Creator's member record has no role label yet
-   * - No other member currently has coordinator role
+   * - Project metadata.coordinator_agent is not yet set
    *
    * **When Called:**
    * Automatically invoked by these tool handlers on first project access:
@@ -1130,8 +1081,8 @@ export class FileSystemStorage {
    *
    * **Performance:**
    * - Fast existence check that short-circuits if coordinator exists
-   * - No lock required (writes are idempotent, single coordinator enforcement in joinProject)
-   * - Minimal overhead for all projects (just member list scan + role check)
+   * - No lock required (writes are idempotent)
+   * - Minimal overhead for all projects (just metadata read + field check)
    *
    * @param projectId - Project to check and migrate
    *
@@ -1144,10 +1095,9 @@ export class FileSystemStorage {
    * await this.storage.ensureProjectHasCoordinator('api-redesign');
    *
    * // Migration scenarios:
-   * // 1. Project has coordinator → no-op (short circuit)
-   * // 2. Creator not yet member → no-op (wait for join)
-   * // 3. Creator member without role → backfill coordinator role
-   * // 4. Project has no creator → no-op (safety - no action)
+   * // 1. Project has coordinator_agent in metadata → no-op (short circuit)
+   * // 2. Project has no creator → no-op (safety - no action)
+   * // 3. Project has creator but no coordinator_agent → backfill to metadata
    * ```
    */
   async ensureProjectHasCoordinator(projectId: string): Promise<void> {
@@ -1156,30 +1106,14 @@ export class FileSystemStorage {
     const metadata = await this.getProjectMetadata(projectId);
     if (!metadata || !metadata.created_by) return; // No creator = nothing to migrate
 
-    const members = await this.listProjectMembers(projectId);
+    // Check if coordinator already set in metadata (fast path - most common case post-migration)
+    if (metadata.coordinator_agent) return; // Already has coordinator - no migration needed
 
-    // Check if coordinator already exists (fast path - most common case post-migration)
-    const hasCoordinator = members.some(m => m.labels?.role === 'coordinator');
-    if (hasCoordinator) return; // Already has coordinator - no migration needed
+    // Backfill coordinator to metadata (set to creator)
+    metadata.coordinator_agent = metadata.created_by;
 
-    // Find creator member
-    const creatorMember = members.find(m => m.agent_name === metadata.created_by);
-    if (!creatorMember) return; // Creator not a member yet - wait for them to join
-
-    // Backfill coordinator role to creator (if they don't already have a role)
-    if (!creatorMember.labels?.role) {
-      creatorMember.labels = { ...creatorMember.labels, role: 'coordinator' };
-
-      const memberPath = path.join(
-        this.root,
-        'projects',
-        projectId,
-        'members',
-        `${creatorMember.agent_name}.json`
-      );
-
-      await this.atomicWrite(memberPath, JSON.stringify(creatorMember, null, 2));
-    }
+    const metadataPath = path.join(this.root, 'projects', projectId, 'metadata.json');
+    await this.atomicWrite(metadataPath, JSON.stringify(metadata, null, 2));
   }
 
   // ============================================================================
