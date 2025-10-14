@@ -817,6 +817,27 @@ export class FileSystemStorage {
     });
 
     try {
+      // Check if this client is already a member under a different name
+      if (member.client_id) {
+        const allMembers = await this.listProjectMembers(member.project_id);
+        const existingClientMembership = allMembers.find(
+          m => m.client_id === member.client_id && m.agent_name !== member.agent_name
+        );
+
+        if (existingClientMembership) {
+          throw new ConflictError(
+            `This client is already a member of the project as '${existingClientMembership.agent_name}'. Please leave that membership before joining with a different name.`,
+            'CLIENT_ALREADY_MEMBER',
+            {
+              project_id: member.project_id,
+              existing_agent_name: existingClientMembership.agent_name,
+              requested_agent_name: member.agent_name,
+              client_id: member.client_id
+            }
+          );
+        }
+      }
+
       // Check if agent name is already taken
       const existing = await this.getProjectMember(member.project_id, member.agent_name);
 

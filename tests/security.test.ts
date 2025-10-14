@@ -324,6 +324,164 @@ describe('Security: Error Message Sanitization', () => {
   });
 });
 
+describe('Security: Client Membership Enforcement', () => {
+  it('should reject join with different agent name when client is already a member', async () => {
+    const testRoot = path.join(tmpdir(), `brainstorm-test-${Date.now()}`);
+    const storage = new FileSystemStorage(testRoot);
+    await storage.initialize();
+
+    // Create project
+    const project: ProjectMetadata = {
+      project_id: 'test-project',
+      name: 'Test Project',
+      created_at: new Date().toISOString(),
+      schema_version: '1.0'
+    };
+    await storage.createProject(project);
+
+    // Client joins as 'alice'
+    const firstMember: ProjectMember = {
+      project_id: 'test-project',
+      agent_name: 'alice',
+      agent_id: 'id-alice',
+      client_id: 'client-123', // Same client
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+      online: true
+    };
+    await storage.joinProject(firstMember);
+
+    // Same client tries to join as 'bob'
+    const secondMember: ProjectMember = {
+      project_id: 'test-project',
+      agent_name: 'bob',
+      agent_id: 'id-bob',
+      client_id: 'client-123', // Same client ID
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+      online: true
+    };
+
+    // Should reject - client is already a member as 'alice'
+    await assert.rejects(
+      () => storage.joinProject(secondMember),
+      {
+        message: /already a member of the project as 'alice'/,
+        code: 'CLIENT_ALREADY_MEMBER'
+      },
+      'Should reject join when client is already a member with different name'
+    );
+
+    // Verify only 'alice' membership exists
+    const members = await storage.listProjectMembers('test-project');
+    assert.strictEqual(members.length, 1, 'Should have exactly one member');
+    assert.strictEqual(members[0].agent_name, 'alice', 'Member should be alice');
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+  });
+
+  it('should allow different clients to join with different names', async () => {
+    const testRoot = path.join(tmpdir(), `brainstorm-test-${Date.now()}`);
+    const storage = new FileSystemStorage(testRoot);
+    await storage.initialize();
+
+    // Create project
+    const project: ProjectMetadata = {
+      project_id: 'test-project',
+      name: 'Test Project',
+      created_at: new Date().toISOString(),
+      schema_version: '1.0'
+    };
+    await storage.createProject(project);
+
+    // Client 1 joins as 'alice'
+    const member1: ProjectMember = {
+      project_id: 'test-project',
+      agent_name: 'alice',
+      agent_id: 'id-alice',
+      client_id: 'client-1',
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+      online: true
+    };
+    await storage.joinProject(member1);
+
+    // Client 2 joins as 'bob' (different client)
+    const member2: ProjectMember = {
+      project_id: 'test-project',
+      agent_name: 'bob',
+      agent_id: 'id-bob',
+      client_id: 'client-2', // Different client ID
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+      online: true
+    };
+
+    // Should succeed - different clients
+    await assert.doesNotReject(
+      () => storage.joinProject(member2),
+      'Should allow different clients to join'
+    );
+
+    // Verify both memberships exist
+    const members = await storage.listProjectMembers('test-project');
+    assert.strictEqual(members.length, 2, 'Should have two members');
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+  });
+
+  it('should allow same client to reclaim their name', async () => {
+    const testRoot = path.join(tmpdir(), `brainstorm-test-${Date.now()}`);
+    const storage = new FileSystemStorage(testRoot);
+    await storage.initialize();
+
+    // Create project
+    const project: ProjectMetadata = {
+      project_id: 'test-project',
+      name: 'Test Project',
+      created_at: new Date().toISOString(),
+      schema_version: '1.0'
+    };
+    await storage.createProject(project);
+
+    // Client joins as 'alice'
+    const firstJoin: ProjectMember = {
+      project_id: 'test-project',
+      agent_name: 'alice',
+      agent_id: 'id-alice-1',
+      client_id: 'client-123',
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+      online: true
+    };
+    await storage.joinProject(firstJoin);
+
+    // Same client rejoins as 'alice' (smart name reclaim)
+    const secondJoin: ProjectMember = {
+      project_id: 'test-project',
+      agent_name: 'alice', // Same name
+      agent_id: 'id-alice-2', // Different agent_id
+      client_id: 'client-123', // Same client_id
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+      online: true
+    };
+
+    // Should succeed - same client reclaiming same name
+    await assert.doesNotReject(
+      () => storage.joinProject(secondJoin),
+      'Should allow client to reclaim their own name'
+    );
+
+    // Verify single membership exists
+    const members = await storage.listProjectMembers('test-project');
+    assert.strictEqual(members.length, 1, 'Should have one member');
+    assert.strictEqual(members[0].agent_name, 'alice', 'Member should be alice');
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+  });
+});
+
 describe('Security: Race Condition Prevention (Phase 2)', () => {
   it('should prevent simultaneous project creation', async () => {
     const testRoot = path.join(tmpdir(), `brainstorm-test-${Date.now()}`);
