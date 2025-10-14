@@ -178,7 +178,7 @@ claude() {
 
   # If no arguments provided, check Brainstorm status first
   if [ $# -eq 0 ]; then
-    local prompt="Check brainstorm status using mcp__brainstorm__status with working_directory from <env>, then wait for my instructions"
+    local prompt="CRITICAL: Check Brainstorm status using mcp__brainstorm__status with working_directory set to the EXACT initial 'Working directory' path from the <env> block (shown at conversation start - NOT the current PWD). Show: (1) Your agent name and role (coordinator/contributor) in each project, (2) Unread message counts, (3) Any handoff messages requiring action. If you have unread messages, ask if I want to review them before proceeding with other tasks."
     command claude "$prompt"
   else
     command claude "$@"

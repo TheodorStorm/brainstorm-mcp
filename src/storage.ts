@@ -169,8 +169,8 @@ export class FileSystemStorage {
         heartbeat_timeout_seconds: 300,
         lock_stale_timeout_ms: 30000,
         max_resource_size_bytes: 500 * 1024, // 500KB - realistic for agent context windows
-        max_long_poll_timeout_seconds: 900,
-        default_long_poll_timeout_seconds: 90
+        max_long_poll_timeout_seconds: 3600,
+        default_long_poll_timeout_seconds: 300
       };
       await this.atomicWrite(configPath, JSON.stringify(defaultConfig, null, 2));
     }
@@ -817,6 +817,29 @@ export class FileSystemStorage {
     });
 
     try {
+      // Check if agent is trying to join as coordinator
+      const isCoordinatorRole = member.labels?.role === 'coordinator';
+
+      if (isCoordinatorRole) {
+        // Check if a coordinator already exists in the project
+        const members = await this.listProjectMembers(member.project_id);
+        const existingCoordinator = members.find(m =>
+          m.labels?.role === 'coordinator' && m.agent_name !== member.agent_name
+        );
+
+        if (existingCoordinator) {
+          throw new ConflictError(
+            'Only one coordinator allowed per project. Current coordinator: ' + existingCoordinator.agent_name,
+            'COORDINATOR_EXISTS',
+            {
+              project_id: member.project_id,
+              existing_coordinator: existingCoordinator.agent_name,
+              attempted_by: member.agent_name
+            }
+          );
+        }
+      }
+
       // Check if agent name is already taken
       const existing = await this.getProjectMember(member.project_id, member.agent_name);
 
@@ -953,6 +976,209 @@ export class FileSystemStorage {
       await this.atomicWrite(memberPath, JSON.stringify(member, null, 2));
     } finally {
       await unlock();
+    }
+  }
+
+  /**
+   * Transfers coordinator role from one agent to another atomically.
+   *
+   * Allows the current coordinator to hand over their coordinator role to another
+   * project member. The operation is atomic and uses locking to prevent race conditions.
+   *
+   * **Authorization:**
+   * - Only the current coordinator can initiate a handover
+   * - Target agent must already be a member of the project
+   * - Target agent must not already be the coordinator
+   *
+   * **Atomic Operation:**
+   * - Removes `labels.role = 'coordinator'` from fromAgent
+   * - Adds `labels.role = 'coordinator'` to toAgent
+   * - Both updates happen atomically under a project-wide lock
+   *
+   * @param projectId - Project containing both agents
+   * @param fromAgent - Current coordinator agent name
+   * @param toAgent - Target agent name to become new coordinator
+   *
+   * @returns Promise that resolves when role transfer is complete
+   * @throws {ValidationError} If identifiers contain unsafe characters
+   * @throws {NotFoundError} If project or either agent doesn't exist
+   * @throws {PermissionError} If fromAgent is not the current coordinator
+   * @throws {ConflictError} If toAgent is already a coordinator
+   *
+   * @example
+   * ```typescript
+   * await this.handoverCoordinator(
+   *   'api-redesign',
+   *   'architect',  // Current coordinator
+   *   'frontend'    // New coordinator
+   * );
+   * ```
+   */
+  async handoverCoordinator(projectId: string, fromAgent: string, toAgent: string): Promise<void> {
+    this.assertSafeId(projectId, 'project_id');
+    this.assertSafeId(fromAgent, 'from_agent');
+    this.assertSafeId(toAgent, 'to_agent');
+
+    // Verify project exists
+    const project = await this.getProjectMetadata(projectId);
+    if (!project) {
+      throw new NotFoundError(
+        'Project not found',
+        'PROJECT_NOT_FOUND',
+        { project_id: projectId }
+      );
+    }
+
+    // Acquire project-wide lock for coordinator handover to ensure atomicity
+    const lockKey = `coordinator-handover_${projectId}`;
+    const unlock = await this.acquireLock(lockKey, {
+      reason: `handover-coordinator-${fromAgent}-to-${toAgent}`,
+      timeout_ms: 10000
+    });
+
+    try {
+      // Verify both agents exist
+      const fromMember = await this.getProjectMember(projectId, fromAgent);
+      if (!fromMember) {
+        throw new NotFoundError(
+          'Source agent not found in project',
+          'FROM_AGENT_NOT_FOUND',
+          { project_id: projectId, agent_name: fromAgent }
+        );
+      }
+
+      const toMember = await this.getProjectMember(projectId, toAgent);
+      if (!toMember) {
+        throw new NotFoundError(
+          'Target agent not found in project',
+          'TO_AGENT_NOT_FOUND',
+          { project_id: projectId, agent_name: toAgent }
+        );
+      }
+
+      // Verify fromAgent is current coordinator
+      if (fromMember.labels?.role !== 'coordinator') {
+        throw new PermissionError(
+          'Access denied: only the current coordinator can hand over the role',
+          'NOT_COORDINATOR',
+          { project_id: projectId, requester: fromAgent, current_role: fromMember.labels?.role || 'none' }
+        );
+      }
+
+      // Verify toAgent is not already coordinator (shouldn't happen, but safety check)
+      if (toMember.labels?.role === 'coordinator') {
+        throw new ConflictError(
+          'Target agent is already a coordinator',
+          'ALREADY_COORDINATOR',
+          { project_id: projectId, agent_name: toAgent }
+        );
+      }
+
+      // Remove coordinator role from fromAgent
+      if (fromMember.labels) {
+        // Create new labels object without coordinator role
+        const { role, ...otherLabels } = fromMember.labels;
+        fromMember.labels = Object.keys(otherLabels).length > 0 ? otherLabels : undefined;
+      }
+
+      // Add coordinator role to toAgent
+      toMember.labels = { ...toMember.labels, role: 'coordinator' };
+
+      // Update both members atomically
+      const fromMemberPath = path.join(
+        this.root,
+        'projects',
+        projectId,
+        'members',
+        `${fromAgent}.json`
+      );
+
+      const toMemberPath = path.join(
+        this.root,
+        'projects',
+        projectId,
+        'members',
+        `${toAgent}.json`
+      );
+
+      await this.atomicWrite(fromMemberPath, JSON.stringify(fromMember, null, 2));
+      await this.atomicWrite(toMemberPath, JSON.stringify(toMember, null, 2));
+    } finally {
+      await unlock();
+    }
+  }
+
+  /**
+   * Ensures project has a coordinator by backfilling role to creator if missing (v0.10.0 migration).
+   *
+   * This migration provides backward compatibility for projects created before v0.10.0,
+   * where coordinators were not automatically assigned. Safe to call repeatedly - the
+   * operation is idempotent and only assigns coordinator if all conditions are met.
+   *
+   * **Migration Conditions:**
+   * - Project has a created_by field (identifies creator)
+   * - Creator is currently a project member
+   * - Creator's member record has no role label yet
+   * - No other member currently has coordinator role
+   *
+   * **When Called:**
+   * Automatically invoked by these tool handlers on first project access:
+   * - get_project_info (most common read operation)
+   * - join_project (when any agent joins)
+   * - send_message (when any agent sends messages)
+   * - receive_messages (when any agent checks inbox)
+   *
+   * **Performance:**
+   * - Fast existence check that short-circuits if coordinator exists
+   * - No lock required (writes are idempotent, single coordinator enforcement in joinProject)
+   * - Minimal overhead for all projects (just member list scan + role check)
+   *
+   * @param projectId - Project to check and migrate
+   *
+   * @returns Promise that resolves when migration check completes (no return value)
+   * @throws {ValidationError} If projectId contains unsafe characters
+   *
+   * @example
+   * ```typescript
+   * // Called automatically from tool handlers
+   * await this.storage.ensureProjectHasCoordinator('api-redesign');
+   *
+   * // Migration scenarios:
+   * // 1. Project has coordinator → no-op (short circuit)
+   * // 2. Creator not yet member → no-op (wait for join)
+   * // 3. Creator member without role → backfill coordinator role
+   * // 4. Project has no creator → no-op (safety - no action)
+   * ```
+   */
+  async ensureProjectHasCoordinator(projectId: string): Promise<void> {
+    this.assertSafeId(projectId, 'project_id');
+
+    const metadata = await this.getProjectMetadata(projectId);
+    if (!metadata || !metadata.created_by) return; // No creator = nothing to migrate
+
+    const members = await this.listProjectMembers(projectId);
+
+    // Check if coordinator already exists (fast path - most common case post-migration)
+    const hasCoordinator = members.some(m => m.labels?.role === 'coordinator');
+    if (hasCoordinator) return; // Already has coordinator - no migration needed
+
+    // Find creator member
+    const creatorMember = members.find(m => m.agent_name === metadata.created_by);
+    if (!creatorMember) return; // Creator not a member yet - wait for them to join
+
+    // Backfill coordinator role to creator (if they don't already have a role)
+    if (!creatorMember.labels?.role) {
+      creatorMember.labels = { ...creatorMember.labels, role: 'coordinator' };
+
+      const memberPath = path.join(
+        this.root,
+        'projects',
+        projectId,
+        'members',
+        `${creatorMember.agent_name}.json`
+      );
+
+      await this.atomicWrite(memberPath, JSON.stringify(creatorMember, null, 2));
     }
   }
 

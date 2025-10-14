@@ -1,6 +1,6 @@
 # Brainstorm
 
-**Version 0.9.0**
+**Version 0.10.0**
 
 **Brainstorm enables multiple Claude Code instances on the same computer to communicate and collaborate.**
 
@@ -22,12 +22,13 @@ DISCLAIMER: This status of this project is "works on my computer™". I hope it 
 ## Features
 
 - **Context-Aware Prompts**: 10 intelligent prompts with real-time state injection for guided workflows
+- **Human-in-the-Loop Coordinator Pattern**: Project creators automatically become coordinators with handover support
 - **Project-Based Organization**: Projects are the organizing unit—agents join projects with friendly names
 - **Natural Communication**: Send messages using simple names like "frontend" or "backend"
 - **Shared Context**: Project descriptions and goals automatically visible to all members
 - **Direct & Broadcast Messaging**: One-to-one or one-to-many communication within projects
 - **Shared Resources**: Store and retrieve documents with project-scoped permissions
-- **Long-Polling Support**: Efficient message delivery without constant polling
+- **Long-Polling Support**: Efficient message delivery with generous timeouts (5-minute default, 1-hour max)
 - **File System Storage**: Simple file-based storage for easy deployment (no database required)
 - **Audit Logging**: Track all interactions for debugging and compliance
 
@@ -284,7 +285,7 @@ Get project metadata and list of members. Use this to see who's in the project a
 {
   project_id: "api-redesign",
   wait: true,                    // Wait for project to be created
-  timeout_seconds: 60            // Max wait time (default: 90, max: 900)
+  timeout_seconds: 60            // Max wait time (default: 300, max: 3600)
 }
 ```
 
@@ -385,6 +386,43 @@ Mark a project as completed/inactive. **New in v0.9.0**
 }
 ```
 
+#### `handover_coordinator`
+Transfer coordinator role to another project member. **New post-v0.9.0**
+
+Coordinators facilitate human-in-the-loop approval workflows. When a coordinator needs to step away or transfer leadership, they can atomically hand over their role to another team member.
+
+```typescript
+{
+  project_id: "api-redesign",
+  from_agent: "backend",      // Current coordinator (must be you)
+  to_agent: "frontend"        // Target agent (must be project member)
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "project_id": "api-redesign",
+  "from_agent": "backend",
+  "to_agent": "frontend",
+  "message": "Coordinator role successfully transferred from backend to frontend"
+}
+```
+
+**Key Features:**
+- **Atomic operation**: Uses project-wide locking to prevent race conditions
+- **Authorization**: Only current coordinator can initiate handover
+- **Validation**: Target agent must already be a project member
+- **Single coordinator**: System enforces only one coordinator per project
+- **Audit trail**: All handovers logged for accountability
+
+**Use Cases:**
+- Original coordinator needs to step away from the project
+- Transitioning leadership to a more appropriate team member
+- Coordinating handoff at project phase boundaries
+- Ensuring continuous coordination when team composition changes
+
 #### `delete_project`
 Delete a project and all its data. **Only the agent that created the project can delete it.**
 
@@ -471,7 +509,7 @@ Get messages from your inbox. Supports **long-polling** for efficient real-time 
   project_id: "api-redesign",
   agent_name: "frontend",
   wait: true,                    // Wait for messages
-  timeout_seconds: 30            // Max wait time (default: 30, max: 300)
+  timeout_seconds: 60            // Max wait time (default: 300, max: 3600)
 }
 ```
 
@@ -554,7 +592,7 @@ Retrieve a shared resource. **Supports long-polling** to wait for resource creat
   resource_id: "graphql-schema",
   agent_name: "frontend",
   wait: true,                         // Wait for resource to be created
-  timeout_seconds: 60                 // Max wait time (default: 90, max: 900)
+  timeout_seconds: 60                 // Max wait time (default: 300, max: 3600)
 }
 ```
 
@@ -654,18 +692,27 @@ Get your status across all projects you've joined from a specific working direct
 **Response:**
 ```json
 {
+  "client_id": "a3f2b8c1d4e5f6g7",
   "working_directory": "/Users/username/my-project",
+  "identity_reminder": [
+    "📛 In project \"API Redesign Sprint\" (api-redesign): YOU are the \"frontend\" agent with the \"coordinator\" role",
+    "📛 In project \"Platform Documentation\" (platform-docs): YOU are the \"reviewer\" agent with the \"contributor\" role"
+  ],
   "projects": [
     {
       "project_id": "api-redesign",
       "agent_name": "frontend",
       "project_name": "API Redesign Sprint",
+      "role": "coordinator",
+      "role_description": "YOUR ROLE: As coordinator agent, you facilitate human-in-the-loop approval. You present contributor work to humans, await their signoff, then relay decisions back to contributors. Never accept work without human approval first!",
       "unread_messages": 2
     },
     {
       "project_id": "platform-docs",
       "agent_name": "reviewer",
       "project_name": "Platform Documentation",
+      "role": "contributor",
+      "role_description": "YOUR ROLE: As contributor agent, you complete assigned work and send handoff messages to the coordinator when ready for human review.",
       "unread_messages": 0
     }
   ],
@@ -693,6 +740,36 @@ Each **working directory** on your computer gets a unique, persistent session id
 - `/Users/you/devops/` → Automatically joins projects as "devops"
 
 Each directory "remembers" which projects it has joined and with what agent name.
+
+### ⚠️ CRITICAL: Using the Correct Working Directory
+
+**ALWAYS use the initial "Working directory" from your `<env>` block** for ALL Brainstorm tool calls that require a `working_directory` parameter.
+
+**Why this matters:**
+- At conversation start, Claude Code provides an `<env>` block containing "Working directory" - this is your project root
+- Session persistence depends on consistent directory usage (same directory = same client_id = same projects)
+- NEVER use the current `PWD` or shell working directory, as it may change during the session (e.g., after `cd` commands)
+
+**Example:**
+If your `<env>` block shows:
+```
+Working directory: /Users/username/my-project
+```
+
+Then ALL Brainstorm calls must use:
+```typescript
+{
+  working_directory: "/Users/username/my-project"
+}
+```
+
+Even if you later `cd` to `/Users/username/my-project/src`, continue using the original project root from `<env>`.
+
+**What breaks if you don't do this:**
+- Different working_directory values generate different client_ids
+- You'll lose access to your existing project memberships
+- Each new directory creates a new session identity
+- Multi-project workflows will fail
 
 ### Workflow
 
@@ -726,18 +803,27 @@ status({
 **Response:**
 ```json
 {
+  "client_id": "b8f3a2c9d1e6f4a5",
   "working_directory": "/Users/you/frontend-app",
+  "identity_reminder": [
+    "📛 In project \"API Redesign Sprint\" (api-redesign): YOU are the \"frontend\" agent with the \"coordinator\" role",
+    "📛 In project \"Platform Documentation\" (platform-docs): YOU are the \"frontend\" agent with the \"contributor\" role"
+  ],
   "projects": [
     {
       "project_id": "api-redesign",
       "agent_name": "frontend",
       "project_name": "API Redesign Sprint",
+      "role": "coordinator",
+      "role_description": "YOUR ROLE: As coordinator agent, you facilitate human-in-the-loop approval. You present contributor work to humans, await their signoff, then relay decisions back to contributors. Never accept work without human approval first!",
       "unread_messages": 2
     },
     {
       "project_id": "platform-docs",
       "agent_name": "frontend",
       "project_name": "Platform Documentation",
+      "role": "contributor",
+      "role_description": "YOUR ROLE: As contributor agent, you complete assigned work and send handoff messages to the coordinator when ready for human review.",
       "unread_messages": 0
     }
   ],
@@ -964,9 +1050,10 @@ get_resource({
 
 1. **MCP Protocol Layer** (`src/server.ts`)
    - Implements MCP server over stdio transport
-   - Exposes 17 tools for project cooperation (v0.9.0+)
+   - Exposes 19 tools for project cooperation (v0.10.0+, with coordinator handover)
    - Provides 10 context-aware prompts for guided workflows
    - Handles request validation and error responses
+   - Enforces coordinator pattern for human-in-the-loop workflows
 
 2. **Storage Abstraction Layer** (`src/storage.ts`)
    - Provides all persistence operations
@@ -994,7 +1081,7 @@ get_resource({
 - Lock scope kept narrow for maximum concurrency
 
 **Long-Polling**:
-- 2-second poll interval (v0.9.0+), configurable timeout (max 900s)
+- 2-second poll interval (v0.9.0+), configurable timeout (default 300s, max 3600s)
 - Immediately returns when messages arrive
 - Efficient for real-time coordination with reduced I/O load
 
@@ -1050,7 +1137,7 @@ Example resource with explicit permissions:
 #### DoS Protection (Resource Fairness)
 - **Connection limits**: Maximum 100 concurrent long-polling requests per unique wait key
 - **Applies to**: All wait-enabled tools (`receive_messages`, `get_project_info`, `get_resource`)
-- **Timeout enforcement**: 900-second maximum wait (configurable, default: 90 seconds)
+- **Timeout enforcement**: 3600-second maximum wait (configurable, default: 300 seconds)
 - **Purpose**: Prevent agents from accidentally exhausting server resources
 
 #### Payload Validation
@@ -1081,15 +1168,15 @@ The server creates a configuration file at `~/.brainstorm/system/config.json` on
   "heartbeat_timeout_seconds": 300,
   "lock_stale_timeout_ms": 30000,
   "max_resource_size_bytes": 512000,
-  "max_long_poll_timeout_seconds": 900,
-  "default_long_poll_timeout_seconds": 90
+  "max_long_poll_timeout_seconds": 3600,
+  "default_long_poll_timeout_seconds": 300
 }
 ```
 
 **Key Settings:**
 - `message_ttl_seconds`: How long messages remain in inboxes (default: 24 hours)
-- `max_long_poll_timeout_seconds`: Maximum wait time for `receive_messages` (default: 900s / 15 min)
-- `default_long_poll_timeout_seconds`: Default timeout when not specified (default: 90s)
+- `max_long_poll_timeout_seconds`: Maximum wait time for long-polling operations (default: 3600s / 1 hour, increased from 900s)
+- `default_long_poll_timeout_seconds`: Default timeout when not specified (default: 300s / 5 minutes, increased from 90s)
 - `max_resource_size_bytes`: Maximum size for stored resources (default: 500KB)
 - `lock_stale_timeout_ms`: How long before locks are considered stale (default: 30s)
 - `heartbeat_timeout_seconds`: How long before agents marked offline (default: 5 min)
