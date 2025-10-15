@@ -144,13 +144,38 @@ All sources and citations.
 3. researcher-3 proposes claim-3 → All review → All agree → **researcher-1's turn**
 4. (Cycle continues...)
 
-### Claim Lifecycle
+### Claim Lifecycle State Machine
 
 ```
-PROPOSED → UNDER_REVIEW → [CHALLENGED] → [REFINED] → AGREED
-                                ↓
-                          REJECTED (removed from pending)
+PROPOSED (by researcher-X)
+    ↓
+UNDER_REVIEW (awaiting 3× claim_agreed)
+    ↓
+    ├─→ All 3 send claim_agreed → CONSENSUS REACHED
+    │       ↓
+    │   researcher-1 moves to claims-agreed
+    │       ↓
+    │   FINALIZED
+    │
+    ├─→ Any agent sends claim_challenged → CHALLENGED
+    │       ↓
+    │   Proposer must respond:
+    │       ├─→ Refines claim → REFINED
+    │       │       ↓
+    │       │   Challenger MUST respond (180s timeout)
+    │       │       ├─→ claim_agreed → Back to UNDER_REVIEW
+    │       │       ├─→ claim_challenged → Back to CHALLENGED
+    │       │       └─→ No response → TIMEOUT → Assumed consent
+    │       │
+    │       ├─→ Defends with evidence → Still CHALLENGED
+    │       └─→ Withdraws → REJECTED
+    │
+    └─→ No activity for 2 turns → STALLED
+            ↓
+        researcher-1 triggers timeout resolution
 ```
+
+**Consensus requires:** Exactly 3 `claim_agreed` messages (one per researcher)
 
 ## Message Types and Actions
 
@@ -207,9 +232,25 @@ PROPOSED → UNDER_REVIEW → [CHALLENGED] → [REFINED] → AGREED
 
 **Response Required**: All agents review refinement
 
+**CRITICAL - Self-Agreement After Refinement:**
+When you refine your own claim, you MUST send a separate `claim_agreed` message after storing the refinement. Refinement ≠ automatic agreement.
+
+Example flow:
+1. You refine your claim → Store refinement to claims-pending
+2. Send refinement message to notify others
+3. Send claim_agreed message to explicitly confirm you agree with refined version
+
 ### 4. claim_agreed
 
-**When**: All agents accept a claim (unanimity required)
+**When**: Agent explicitly agrees to a claim (unanimity required)
+
+**CRITICAL - Agreement Counting Rule:**
+A claim moves to claims-agreed when ALL THREE researchers send claim_agreed:
+- Proposer sends claim_agreed (including after any self-refinements)
+- Second researcher sends claim_agreed
+- Third researcher sends claim_agreed
+
+Total required: 3 claim_agreed messages (one from each researcher)
 
 **Payload**:
 ```json
@@ -233,6 +274,27 @@ Upon receiving three `claim_agreed` messages for a claim, **ONLY researcher-1 (L
 5. Broadcast `claim_finalized` message
 
 **Other agents (researcher-2, researcher-3) should NOT update resources after sending `claim_agreed`** - wait for the finalization message from researcher-1.
+
+### 4a. Challenge Resolution Protocol
+
+**When a claim is challenged and then refined:**
+
+**CRITICAL - Challenger Must Respond:**
+If your challenge prompted a refinement, you MUST respond within:
+- 1 turn in turn-based flow, OR
+- 180 seconds (3 minutes) in long-polling
+
+**Required response (choose one):**
+1. ✅ Send `claim_agreed` if refinement satisfies your concerns
+2. ❌ Send `claim_challenged` again if issues remain (with new specific reasons)
+
+**Deadlock Prevention - Assumed Consent:**
+If challenger doesn't respond within timeout, researcher-1 (Lead) will:
+1. Send warning message: "Finalizing claim-XXX by assumed consent in 60 seconds"
+2. Wait 60 seconds for objection
+3. If no objection: Proceed to finalize with note "challenger timeout - assumed consent"
+
+This prevents one silent agent from blocking all progress.
 
 ### 5. claim_rejected
 
@@ -460,6 +522,29 @@ If claim in `claims-pending` for more than 5 turns:
 1. Any agent can propose to reject
 2. Vote on rejection
 3. If majority yes → Remove claim
+
+**Automatic Resolution by Lead (researcher-1):**
+
+When a claim has been refined and shows 2 `claim_agreed` messages but the third agent hasn't responded for 2+ consecutive turns:
+
+1. **Warning Phase:** researcher-1 broadcasts:
+   ```json
+   {
+     "action": "claim_timeout_warning",
+     "claim_id": "claim-XXX",
+     "waiting_for": "researcher-Y",
+     "message": "Finalizing by assumed consent in 60 seconds unless you object"
+   }
+   ```
+
+2. **Wait Period:** 60 seconds for objection
+
+3. **Finalization:** If no objection, researcher-1:
+   - Moves claim to claims-agreed
+   - Adds note: `"finalization_method": "timeout_assumed_consent"`
+   - Broadcasts claim_finalized
+
+This prevents deadlocks while still giving agents time to object.
 
 ### Disagreement Deadlock
 If researcher-1 and researcher-2 can't agree:
