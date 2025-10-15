@@ -12,6 +12,7 @@ echo "  - Manage food consumption"
 echo "  - Update ant positions"
 echo ""
 
+export BRAINSTORM_CLIENT_ID="pathfinding-manager"
 claude "You are the game manager for the pathfinding demo. Read and follow the instructions in MANAGER.md EXACTLY.
 
 CRITICAL RESPONSIBILITIES:

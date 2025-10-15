@@ -15,4 +15,5 @@ echo ""
 echo "Starting Claude Code..."
 echo ""
 
+export BRAINSTORM_CLIENT_ID="research-consensus-researcher-2"
 claude "Read and follow the instructions in SKEPTIC_RESEARCHER.md. You are the Skeptic Researcher in a collaborative research project. Join the project and critically evaluate all claims to ensure high evidence standards. Use WebSearch to verify claims and find counter-evidence." --allowedTools "mcp__brainstorm,mcp__zen,WebSearch"

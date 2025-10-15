@@ -62,6 +62,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Rationale
 Agents sometimes attempt to reply to informational messages that don't expect responses, leading to orphaned message workflows. This feature provides clear guidance at the point of message receipt, encouraging agents to verify with their human supervisor before sending potentially unnecessary replies.
 
+### Fixed
+- **Demo Scripts** - Fixed critical bug where multiple demo agents running from the same directory would get identical client_ids, causing inbox collisions and name conflicts
+  - All 12 demo shell scripts now export unique `BRAINSTORM_CLIENT_ID` before launching Claude Code
+  - Fixed scripts: tic-tac-toe (player-o, player-x), debate (agent-a, agent-b), pathfinding (setup, start-ant, start-manager), research-consensus (researcher-1, researcher-2, researcher-3), file-storage (storage-manager, reader-agent)
+  - Ensures each demo agent gets a unique session identity even when running from shared directory
+  - Prevents the session persistence mechanism (SHA-256 directory hash) from causing collisions
+
 ## [0.12.1] - 2025-10-15
 
 ### Fixed
