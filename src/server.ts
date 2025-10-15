@@ -22,12 +22,18 @@
  * - Each project has ONE coordinator stored in project metadata (v0.11.0+)
  * - Project creator automatically becomes coordinator (metadata.coordinator_agent)
  * - **CRITICAL**: Coordinator is a PROXY for human approval, NOT an autonomous decision-maker
- * - Contributors MUST hand off to coordinator before leaving discussion
  * - Coordinator MUST present work to human, await signoff, THEN respond to contributors
  *
- * **Handoff Workflow (Human-Approved):**
+ * **When to Use Handoff Workflow:**
+ * - ✅ Work was assigned/discussed THROUGH Brainstorm (coordinator delegated it, team discussed it)
+ * - ✅ Coordinator is aware of the work and expects results
+ * - ✅ There's a Brainstorm conversation thread about this task
+ * - ❌ Work was assigned directly by human (outside Brainstorm) → report to human directly, NO handoff
+ * - ❌ No Brainstorm discussion exists about the task → report to human directly, NO handoff
  *
- * **Contributors** complete work and hand off:
+ * **Handoff Workflow (For Brainstorm-Coordinated Work):**
+ *
+ * **Contributors** complete Brainstorm-assigned work and hand off:
  * 1. Send handoff message to coordinator (find via get_project_info, use project.coordinator field)
  * 2. Set payload.type = 'handoff'
  * 3. Set metadata.message_type = 'handoff_to_coordinator'
@@ -175,7 +181,7 @@ function getRoleDescription(role?: string): string {
   if (role === 'coordinator') {
     return 'YOUR ROLE: As coordinator agent, you facilitate human-in-the-loop approval. You present contributor work to humans, await their signoff, then relay decisions back to contributors. Never accept work without human approval first!';
   }
-  return 'YOUR ROLE: As contributor agent, you complete assigned work and send handoff messages to the coordinator when ready for human review.';
+  return 'YOUR ROLE: As contributor agent, complete work assigned through Brainstorm collaboration. When work is assigned/discussed IN Brainstorm, send handoff messages to coordinator upon completion. For direct human instructions (outside Brainstorm), report back to human directly - no coordinator handoff needed.';
 }
 
 /**
@@ -1136,7 +1142,7 @@ export class AgentCoopServer {
             if (isCoordinator) {
               roleMessage = `✅ YOU are now the "${agentName}" agent with the COORDINATOR role in this project. You facilitate human-in-the-loop approval: present contributor work to humans, await signoff, relay decisions. Use handover_coordinator tool to transfer role if needed.`;
             } else {
-              roleMessage = `✅ YOU are now the "${agentName}" agent with the CONTRIBUTOR role in this project. Complete assigned work and send handoff messages to coordinator when done. Wait for coordinator approval before leaving discussion.`;
+              roleMessage = `✅ YOU are now the "${agentName}" agent with the CONTRIBUTOR role in this project. For work assigned/discussed IN Brainstorm, send handoff messages to coordinator when done. For direct human instructions (outside Brainstorm), report to human directly - no handoff needed.`;
             }
 
             return {
@@ -2412,9 +2418,10 @@ ${projectList}
 - Each project already has ONE coordinator (the creator, unless role was handed over)
 - You are joining as a **contributor**, not the coordinator
 - As a contributor, you are responsible for:
-  - Completing assigned work
-  - Sending handoff messages to the coordinator when work is done
-  - Waiting for coordinator acceptance before leaving the discussion
+  - Completing work assigned/discussed through Brainstorm
+  - **When to use handoffs**: ONLY for work assigned IN Brainstorm (coordinator delegated it, or team discussed it)
+  - **When NOT to use handoffs**: For direct human instructions (outside Brainstorm), report to human directly
+  - If work was discussed in Brainstorm: send handoff to coordinator when done, wait for approval
   - Making revisions if coordinator requests changes
 - **Note**: If the coordinator transfers their role to you using \`handover_coordinator\`, you will become the new coordinator`
                   }
@@ -2464,7 +2471,11 @@ ${projectList}
 - **Coordinator Handover**: If you need to transfer coordinator role to another member, use \`handover_coordinator\` tool
 
 **Handoff Workflow (Human-Approved):**
-**Contributors** - when you've completed your work:
+**When to use handoffs:**
+- ✅ Work was assigned/discussed IN Brainstorm (coordinator delegated it, team discussed it)
+- ❌ Direct human instructions (outside Brainstorm) → report to human directly, NO handoff
+
+**Contributors** - when you've completed work assigned IN Brainstorm:
 1. Find the coordinator using \`get_project_info\` (use the \`coordinator\` field from response)
 2. Send direct message to coordinator with:
    - payload.type = 'handoff'
@@ -2528,7 +2539,8 @@ ${projectList}
 
 **IMPORTANT - Coordinator Role:**
 - The coordinator field from \`get_project_info\` shows who facilitates human approvals
-- If you're a contributor, send handoff messages to the coordinator when work is complete
+- If you're a contributor, send handoff messages to coordinator ONLY for work assigned IN Brainstorm
+- For direct human instructions (outside Brainstorm), report to human directly - NO handoff
 - If you're the coordinator, you MUST present contributor work to humans before accepting`
                   }
                 }
@@ -2636,7 +2648,11 @@ When broadcasting the notification about the shared resource:
   - **If needed**: Transfer coordinator role to another member using \`handover_coordinator\` tool
 
 **Handoff Workflow (Human-Approved):**
-**Contributors** - when you've completed your work:
+**When to use handoffs:**
+- ✅ Work was assigned/discussed IN Brainstorm (coordinator delegated it, team discussed it)
+- ❌ Direct human instructions (outside Brainstorm) → report to human directly, NO handoff
+
+**Contributors** - when you've completed work assigned IN Brainstorm:
 1. Find the coordinator using \`get_project_info\` (use the \`coordinator\` field from response)
 2. Send direct message to coordinator with:
    - payload.type = 'handoff'
