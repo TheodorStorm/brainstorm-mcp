@@ -131,7 +131,7 @@ Look for a response from "manager" with:
 - `success: true` → Move approved! Position updated by manager.
 - `success: false` → Move rejected. Read the `reason` and try a different move.
 
-**After receiving response**, use `mcp__brainstorm__acknowledge_message` to clear it.
+**Note**: Messages are automatically archived after reading (v0.12.0+). No acknowledgment required.
 
 ### 7. Repeat
 
@@ -226,8 +226,7 @@ if (!isWall && !isOccupied) {
     // Move rejected, try different direction
   }
 
-  // Acknowledge the message
-  await acknowledgeMessage(response.message_id);
+  // Message is automatically archived (v0.12.0+)
 }
 ```
 

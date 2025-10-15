@@ -22,18 +22,23 @@
  * - Each project has ONE coordinator stored in project metadata (v0.11.0+)
  * - Project creator automatically becomes coordinator (metadata.coordinator_agent)
  * - **CRITICAL**: Coordinator is a PROXY for human approval, NOT an autonomous decision-maker
- * - Contributors MUST hand off to coordinator before leaving discussion
  * - Coordinator MUST present work to human, await signoff, THEN respond to contributors
  *
- * **Handoff Workflow (Human-Approved):**
+ * **When to Use Handoff Workflow:**
+ * - ✅ Work was assigned/discussed THROUGH Brainstorm (coordinator delegated it, team discussed it)
+ * - ✅ Coordinator is aware of the work and expects results
+ * - ✅ There's a Brainstorm conversation thread about this task
+ * - ❌ Work was assigned directly by human (outside Brainstorm) → report to human directly, NO handoff
+ * - ❌ No Brainstorm discussion exists about the task → report to human directly, NO handoff
  *
- * **Contributors** complete work and hand off:
+ * **Handoff Workflow (For Brainstorm-Coordinated Work):**
+ *
+ * **Contributors** complete Brainstorm-assigned work and hand off:
  * 1. Send handoff message to coordinator (find via get_project_info, use project.coordinator field)
  * 2. Set payload.type = 'handoff'
- * 3. Set metadata.message_type = 'handoff_to_coordinator'
- * 4. Include summary of completed work in payload.summary
- * 5. Set reply_expected = TRUE (handoff requires coordinator acceptance)
- * 6. MUST call receive_messages with wait=true to wait for coordinator's response
+ * 3. Include summary of completed work in payload.summary
+ * 4. Set reply_expected = TRUE (handoff requires coordinator acceptance)
+ * 5. MUST call receive_messages with wait=true to wait for coordinator's response
  *
  * **Coordinators** review and facilitate human approval:
  * 1. Receive handoff from contributor
@@ -52,10 +57,6 @@
  *     type: "handoff",
  *     summary: "Completed frontend implementation. All tests passing.",
  *     details: { ... }
- *   },
- *   metadata: {
- *     message_type: "handoff_to_coordinator",
- *     priority: "high"
  *   },
  *   reply_expected: true  // MUST wait for coordinator acceptance!
  * }
@@ -175,7 +176,7 @@ function getRoleDescription(role?: string): string {
   if (role === 'coordinator') {
     return 'YOUR ROLE: As coordinator agent, you facilitate human-in-the-loop approval. You present contributor work to humans, await their signoff, then relay decisions back to contributors. Never accept work without human approval first!';
   }
-  return 'YOUR ROLE: As contributor agent, you complete assigned work and send handoff messages to the coordinator when ready for human review.';
+  return 'YOUR ROLE: As contributor agent, complete work assigned through Brainstorm collaboration. When work is assigned/discussed IN Brainstorm, send handoff messages to coordinator upon completion. For direct human instructions (outside Brainstorm), report back to human directly - no coordinator handoff needed.';
 }
 
 /**
@@ -654,7 +655,7 @@ export class AgentCoopServer {
               },
               reply_expected: {
                 type: 'boolean',
-                description: 'Set true if requesting action/question AND you\'ll immediately wait for replies via receive_messages. False for informational messages. True commits you to wait.'
+                description: 'Set true if requesting action/question AND you\'ll immediately wait for replies via receive_messages. False for informational messages. True commits you to wait. CRITICAL: Handoff messages (payload.type="handoff") MUST use true - they are approval requests, NOT informational messages.'
               },
               payload: {
                 type: 'object',
@@ -670,7 +671,7 @@ export class AgentCoopServer {
         },
         {
           name: 'receive_messages',
-          description: 'Get inbox messages. Supports pagination and long-polling. Respond to messages with reply_expected=true.',
+          description: 'Get inbox messages. Messages are automatically archived after being read. Supports pagination and long-polling. Respond to messages with reply_expected=true. WARNING: Messages with reply_expected=false include a reply_warnings alert - consult your human supervisor if you believe a reply is necessary.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -703,28 +704,6 @@ export class AgentCoopServer {
               }
             },
             required: ['project_id', 'agent_name']
-          }
-        },
-        {
-          name: 'acknowledge_message',
-          description: 'Mark a message as processed (removes it from your inbox)',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              project_id: {
-                type: 'string',
-                description: 'Project you are in'
-              },
-              agent_name: {
-                type: 'string',
-                description: 'Your agent name'
-              },
-              message_id: {
-                type: 'string',
-                description: 'Message ID to acknowledge'
-              }
-            },
-            required: ['project_id', 'agent_name', 'message_id']
           }
         },
         {
@@ -1136,7 +1115,7 @@ export class AgentCoopServer {
             if (isCoordinator) {
               roleMessage = `✅ YOU are now the "${agentName}" agent with the COORDINATOR role in this project. You facilitate human-in-the-loop approval: present contributor work to humans, await signoff, relay decisions. Use handover_coordinator tool to transfer role if needed.`;
             } else {
-              roleMessage = `✅ YOU are now the "${agentName}" agent with the CONTRIBUTOR role in this project. Complete assigned work and send handoff messages to coordinator when done. Wait for coordinator approval before leaving discussion.`;
+              roleMessage = `✅ YOU are now the "${agentName}" agent with the CONTRIBUTOR role in this project. For work assigned/discussed IN Brainstorm, send handoff messages to coordinator when done. For direct human instructions (outside Brainstorm), report to human directly - no handoff needed.`;
             }
 
             return {
@@ -1344,44 +1323,75 @@ export class AgentCoopServer {
 
             // Validate handoff message authority based on sender role
             const payload = args.payload as Record<string, unknown>;
-            const metadata = args.metadata as Record<string, unknown> | undefined;
             const isHandoffMessage =
               payload?.type === 'handoff' ||
               payload?.type === 'handoff_accepted' ||
-              payload?.type === 'handoff_rejected' ||
-              metadata?.message_type === 'handoff_to_coordinator';
+              payload?.type === 'handoff_rejected';
 
             if (isHandoffMessage) {
+              // CRITICAL: Handoff messages MUST have reply_expected=true, EXCEPT handoff_accepted (terminal response)
+              // - handoff (contributor): MUST use reply_expected=true (waits for approval/rejection)
+              // - handoff_rejected (coordinator): MUST use reply_expected=true (expects revised handoff)
+              // - handoff_accepted (coordinator): Can use reply_expected=false (terminal, no reply needed)
+              const isTerminalAccept = payload?.type === 'handoff_accepted';
+
+              if (!replyExpected && !isTerminalAccept) {
+                return {
+                  content: [{
+                    type: 'text',
+                    text: JSON.stringify({
+                      error: 'HANDOFF_REPLY_EXPECTED_REQUIRED',
+                      message: 'Handoff messages MUST have reply_expected=true (except handoff_accepted which is terminal). Handoffs and rejections are synchronous approval requests requiring immediate wait for response, NOT informational fire-and-forget messages.',
+                      provided: {
+                        reply_expected: replyExpected,
+                        payload_type: payload?.type
+                      },
+                      correct_usage: {
+                        handoff: 'reply_expected=true (contributor waits for coordinator response)',
+                        handoff_rejected: 'reply_expected=true (coordinator waits for revised handoff)',
+                        handoff_accepted: 'reply_expected=false or true (terminal response, work complete)'
+                      }
+                    }, null, 2)
+                  }],
+                  isError: true
+                };
+              }
+
               // Validation rules:
-              // - Contributors can ONLY send 'handoff' messages
-              // - Coordinators can ONLY send 'handoff_accepted' or 'handoff_rejected' messages
-              if (senderRole === 'contributor') {
-                if (payload?.type === 'handoff_accepted' || payload?.type === 'handoff_rejected') {
+              // - ONLY contributors can send 'handoff' messages
+              // - ONLY coordinators can send 'handoff_accepted' or 'handoff_rejected' messages
+
+              // Check: handoff_accepted/rejected MUST be from coordinator
+              if (payload?.type === 'handoff_accepted' || payload?.type === 'handoff_rejected') {
+                if (senderRole !== 'coordinator') {
                   return {
                     content: [{
                       type: 'text',
                       text: JSON.stringify({
                         error: 'HANDOFF_AUTHORITY_ERROR',
-                        message: `YOU are a contributor agent. Contributors cannot send "${payload?.type}" messages - only coordinators can approve/reject work.`,
-                        your_role: 'contributor',
-                        allowed_handoff_types: ['handoff'],
-                        details: 'Send handoff messages to the coordinator when your work is ready for human review. The coordinator will handle approval/rejection.'
+                        message: `ONLY coordinators can send "${payload?.type}" messages. YOU are: ${senderRole}`,
+                        your_role: senderRole,
+                        required_role: 'coordinator',
+                        details: 'Approval/rejection messages can only come from the coordinator who facilitates human review.'
                       }, null, 2)
                     }],
                     isError: true
                   };
                 }
-              } else if (senderRole === 'coordinator') {
-                if (payload?.type === 'handoff' || metadata?.message_type === 'handoff_to_coordinator') {
+              }
+
+              // Check: handoff MUST be from contributor
+              if (payload?.type === 'handoff') {
+                if (senderRole !== 'contributor') {
                   return {
                     content: [{
                       type: 'text',
                       text: JSON.stringify({
                         error: 'HANDOFF_AUTHORITY_ERROR',
-                        message: 'YOU are the coordinator agent. Coordinators do not send handoff messages - those come from contributors.',
-                        your_role: 'coordinator',
-                        allowed_handoff_types: ['handoff_accepted', 'handoff_rejected'],
-                        details: 'As coordinator, you receive handoff messages from contributors, present their work to humans, then relay the decision via handoff_accepted or handoff_rejected.'
+                        message: `ONLY contributors can send "handoff" messages. YOU are: ${senderRole}`,
+                        your_role: senderRole,
+                        required_role: 'contributor',
+                        details: 'Handoff messages come from contributors submitting work for approval. Coordinators receive handoffs and send approval/rejection responses.'
                       }, null, 2)
                     }],
                     isError: true
@@ -1427,7 +1437,7 @@ export class AgentCoopServer {
             };
 
             if (isHandoffMessage) {
-              if (payload?.type === 'handoff' || metadata?.message_type === 'handoff_to_coordinator') {
+              if (payload?.type === 'handoff') {
                 // Contributor sending handoff to coordinator
                 response.handoff_detected = {
                   type: 'handoff_to_coordinator',
@@ -1528,11 +1538,27 @@ export class AgentCoopServer {
 
                     // Detect handoff messages and provide role-specific guidance
                     const handoffAlerts: Array<Record<string, unknown>> = [];
+                    const replyWarnings: Array<Record<string, unknown>> = [];
+
                     for (const msg of messages) {
                       const payload = msg.payload as Record<string, unknown>;
-                      const metadata = msg.metadata as Record<string, unknown> | undefined;
 
-                      if (payload?.type === 'handoff' || metadata?.message_type === 'handoff_to_coordinator') {
+                      // Check for messages with reply_expected: false
+                      if (msg.reply_expected === false) {
+                        replyWarnings.push({
+                          message_id: msg.message_id,
+                          from: msg.from_agent,
+                          alert: '⚠️ NO REPLY EXPECTED: This message does not expect a reply',
+                          critical_warning: [
+                            'The sender set reply_expected=false, indicating they are NOT waiting for a response',
+                            'Any replies you send may NOT be received or processed by the sender',
+                            'DO NOT send a reply unless absolutely necessary'
+                          ],
+                          if_reply_needed: 'If you believe a reply is necessary for this message, consult your human supervisor on how to handle this situation before sending any reply.'
+                        });
+                      }
+
+                      if (payload?.type === 'handoff') {
                         handoffAlerts.push({
                           message_id: msg.message_id,
                           from: msg.from_agent,
@@ -1579,6 +1605,10 @@ export class AgentCoopServer {
 
                     if (handoffAlerts.length > 0) {
                       response.handoff_alerts = handoffAlerts;
+                    }
+
+                    if (replyWarnings.length > 0) {
+                      response.reply_warnings = replyWarnings;
                     }
 
                     return {
@@ -1629,11 +1659,27 @@ export class AgentCoopServer {
 
             // Detect handoff messages and provide role-specific guidance
             const handoffAlerts: Array<Record<string, unknown>> = [];
+            const replyWarnings: Array<Record<string, unknown>> = [];
+
             for (const msg of messages) {
               const payload = msg.payload as Record<string, unknown>;
-              const metadata = msg.metadata as Record<string, unknown> | undefined;
 
-              if (payload?.type === 'handoff' || metadata?.message_type === 'handoff_to_coordinator') {
+              // Check for messages with reply_expected: false
+              if (msg.reply_expected === false) {
+                replyWarnings.push({
+                  message_id: msg.message_id,
+                  from: msg.from_agent,
+                  alert: '⚠️ NO REPLY EXPECTED: This message does not expect a reply',
+                  critical_warning: [
+                    'The sender set reply_expected=false, indicating they are NOT waiting for a response',
+                    'Any replies you send may NOT be received or processed by the sender',
+                    'DO NOT send a reply unless absolutely necessary'
+                  ],
+                  if_reply_needed: 'If you believe a reply is necessary for this message, consult your human supervisor on how to handle this situation before sending any reply.'
+                });
+              }
+
+              if (payload?.type === 'handoff') {
                 handoffAlerts.push({
                   message_id: msg.message_id,
                   from: msg.from_agent,
@@ -1681,25 +1727,14 @@ export class AgentCoopServer {
               response.handoff_alerts = handoffAlerts;
             }
 
+            if (replyWarnings.length > 0) {
+              response.reply_warnings = replyWarnings;
+            }
+
             return {
               content: [{
                 type: 'text',
                 text: JSON.stringify(response, null, 2)
-              }]
-            };
-          }
-
-          case 'acknowledge_message': {
-            const projectId = args.project_id as string;
-            const agentName = args.agent_name as string;
-            const messageId = args.message_id as string;
-
-            await this.storage.markMessageProcessed(projectId, agentName, messageId);
-
-            return {
-              content: [{
-                type: 'text',
-                text: JSON.stringify({ success: true }, null, 2)
               }]
             };
           }
@@ -2412,9 +2447,10 @@ ${projectList}
 - Each project already has ONE coordinator (the creator, unless role was handed over)
 - You are joining as a **contributor**, not the coordinator
 - As a contributor, you are responsible for:
-  - Completing assigned work
-  - Sending handoff messages to the coordinator when work is done
-  - Waiting for coordinator acceptance before leaving the discussion
+  - Completing work assigned/discussed through Brainstorm
+  - **When to use handoffs**: ONLY for work assigned IN Brainstorm (coordinator delegated it, or team discussed it)
+  - **When NOT to use handoffs**: For direct human instructions (outside Brainstorm), report to human directly
+  - If work was discussed in Brainstorm: send handoff to coordinator when done, wait for approval
   - Making revisions if coordinator requests changes
 - **Note**: If the coordinator transfers their role to you using \`handover_coordinator\`, you will become the new coordinator`
                   }
@@ -2464,13 +2500,16 @@ ${projectList}
 - **Coordinator Handover**: If you need to transfer coordinator role to another member, use \`handover_coordinator\` tool
 
 **Handoff Workflow (Human-Approved):**
-**Contributors** - when you've completed your work:
+**When to use handoffs:**
+- ✅ Work was assigned/discussed IN Brainstorm (coordinator delegated it, team discussed it)
+- ❌ Direct human instructions (outside Brainstorm) → report to human directly, NO handoff
+
+**Contributors** - when you've completed work assigned IN Brainstorm:
 1. Find the coordinator using \`get_project_info\` (use the \`coordinator\` field from response)
 2. Send direct message to coordinator with:
    - payload.type = 'handoff'
    - payload.summary = "Brief summary of completed work"
-   - metadata.message_type = 'handoff_to_coordinator'
-   - reply_expected = TRUE
+   - reply_expected = TRUE ⚠️ **CRITICAL**: Handoffs are NOT informational messages - they are synchronous approval requests. You MUST set reply_expected=true because you need to wait for human approval/rejection before proceeding.
 3. MUST call \`receive_messages\` with wait=true to wait for coordinator's response
 4. Coordinator will present your work to HUMAN user for review
 5. If human approves (payload.type = 'handoff_accepted'), you're done
@@ -2528,7 +2567,9 @@ ${projectList}
 
 **IMPORTANT - Coordinator Role:**
 - The coordinator field from \`get_project_info\` shows who facilitates human approvals
-- If you're a contributor, send handoff messages to the coordinator when work is complete
+- If you're a contributor, send handoff messages to coordinator ONLY for work assigned IN Brainstorm
+  - ⚠️ **CRITICAL**: Handoffs MUST use reply_expected=true (they are approval requests, NOT informational messages)
+- For direct human instructions (outside Brainstorm), report to human directly - NO handoff
 - If you're the coordinator, you MUST present contributor work to humans before accepting`
                   }
                 }
@@ -2636,13 +2677,16 @@ When broadcasting the notification about the shared resource:
   - **If needed**: Transfer coordinator role to another member using \`handover_coordinator\` tool
 
 **Handoff Workflow (Human-Approved):**
-**Contributors** - when you've completed your work:
+**When to use handoffs:**
+- ✅ Work was assigned/discussed IN Brainstorm (coordinator delegated it, team discussed it)
+- ❌ Direct human instructions (outside Brainstorm) → report to human directly, NO handoff
+
+**Contributors** - when you've completed work assigned IN Brainstorm:
 1. Find the coordinator using \`get_project_info\` (use the \`coordinator\` field from response)
 2. Send direct message to coordinator with:
    - payload.type = 'handoff'
    - payload.summary = "Brief summary of completed work"
-   - metadata.message_type = 'handoff_to_coordinator'
-   - reply_expected = TRUE
+   - reply_expected = TRUE ⚠️ **CRITICAL**: Handoffs are NOT informational messages - they are synchronous approval requests. You MUST set reply_expected=true because you need to wait for human approval/rejection before proceeding.
 3. MUST call \`receive_messages\` with wait=true to wait for coordinator's response
 4. Coordinator will present your work to HUMAN user for review
 5. If human approves (payload.type = 'handoff_accepted'), you're done

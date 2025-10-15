@@ -60,7 +60,7 @@ Default storage location: `~/.brainstorm`
 
 1. **MCP Protocol Layer** (`src/server.ts`)
    - `AgentCoopServer` class implements the MCP server
-   - Exposes 15 tools for agent cooperation (create_project, delete_project, join_project, send_message, receive_messages, acknowledge_message, store_resource, get_resource, list_resources, delete_resource, get_project_info, list_projects, heartbeat, version, status)
+   - Exposes 14 tools for agent cooperation (create_project, delete_project, join_project, send_message, receive_messages, store_resource, get_resource, list_resources, delete_resource, get_project_info, list_projects, heartbeat, version, status)
    - Provides 8 context-aware prompts (list, mystatus, create, join, broadcast, review, share, discuss)
    - Uses stdio transport for communication with MCP clients
    - All tool handlers map to storage layer operations

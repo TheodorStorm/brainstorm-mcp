@@ -1218,40 +1218,68 @@ export class FileSystemStorage {
     this.assertSafeId(projectId, 'project_id');
     this.assertSafeId(agentName, 'agent_name');
 
-    const inboxDir = path.join(this.root, 'projects', projectId, 'messages', agentName);
+    // Acquire lock to prevent race condition with concurrent inbox reads (v0.12.0 fix)
+    const unlock = await this.acquireLock(`inbox-${projectId}-${agentName}`, {
+      reason: `get-agent-inbox-read`,
+      timeout_ms: 5000
+    });
 
     try {
-      const files = await fs.readdir(inboxDir);
-      files.sort(); // Lexicographic sort (timestamp-based filenames)
+      const inboxDir = path.join(this.root, 'projects', projectId, 'messages', agentName);
+      const archiveDir = path.join(inboxDir, 'archive');
 
-      // Apply pagination to file list before reading
-      const start = offset || 0;
-      const end = limit ? start + limit : undefined;
-      const messagesToRead = files.slice(start, end);
-      const messages: Message[] = [];
+      try {
+        const files = await fs.readdir(inboxDir);
+        // Filter out archive directory from file list
+        const messageFiles = files.filter(f => f !== 'archive');
+        messageFiles.sort(); // Lexicographic sort (timestamp-based filenames)
 
-      const config = await this.getSystemConfig();
-      const ttl = config?.message_ttl_seconds || 86400;
-      const now = Date.now();
+        // Apply pagination to file list before reading
+        const start = offset || 0;
+        const end = limit ? start + limit : undefined;
+        const messagesToRead = messageFiles.slice(start, end);
+        const messages: Message[] = [];
 
-      for (const file of messagesToRead) {
-        try {
-          const content = await fs.readFile(path.join(inboxDir, file), 'utf-8');
-          const message = JSON.parse(content) as Message;
+        const config = await this.getSystemConfig();
+        const ttl = config?.message_ttl_seconds || 86400;
+        const now = Date.now();
 
-          // Filter out expired messages
-          const messageAge = now - new Date(message.created_at).getTime();
-          if (messageAge < ttl * 1000) {
-            messages.push(message);
+        // Ensure archive directory exists
+        await fs.mkdir(archiveDir, { recursive: true });
+
+        for (const file of messagesToRead) {
+          try {
+            const filePath = path.join(inboxDir, file);
+            const content = await fs.readFile(filePath, 'utf-8');
+            const message = JSON.parse(content) as Message;
+
+            // Filter out expired messages
+            const messageAge = now - new Date(message.created_at).getTime();
+            if (messageAge < ttl * 1000) {
+              messages.push(message);
+
+              // Auto-acknowledge: move message to archive after successful read (v0.12.0)
+              try {
+                const archivePath = path.join(archiveDir, file);
+                await fs.rename(filePath, archivePath);
+              } catch (archiveErr: any) {
+                // If move fails (e.g., already moved), continue - message was still read
+                if (archiveErr.code !== 'ENOENT') {
+                  console.error(`Warning: Failed to archive message ${file}:`, archiveErr.message);
+                }
+              }
+            }
+          } catch {
+            // Skip malformed messages
           }
-        } catch {
-          // Skip malformed messages
         }
-      }
 
-      return messages;
-    } catch {
-      return [];
+        return messages;
+      } catch {
+        return [];
+      }
+    } finally {
+      await unlock();
     }
   }
 

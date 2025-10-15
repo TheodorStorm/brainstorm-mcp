@@ -86,9 +86,7 @@ Use `mcp__brainstorm__send_message`:
 - reply_expected: false
 - payload: {success: true/false, reason: "...", new_position: {x, y}}
 
-### 7. Acknowledge Message
-
-After processing, use `mcp__brainstorm__acknowledge_message` to remove it from your inbox.
+**Note**: Messages are automatically archived after reading (v0.12.0+). No acknowledgment required.
 
 ## Example Flow
 
@@ -98,7 +96,6 @@ After processing, use `mcp__brainstorm__acknowledge_message` to remove it from y
 3. Manager reads positions → checks no ant at (1,0) ✓
 4. Manager writes position-ant-1 with new coordinates
 5. Manager sends response: {success: true, new_position: {x:1,y:0}}
-6. Manager acknowledges the message
 ```
 
 ## Important Rules
