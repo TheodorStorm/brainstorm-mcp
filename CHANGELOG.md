@@ -37,6 +37,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Health check prompt for detecting offline/stale agents
   - Project analytics (message counts, resource usage, member activity)
 
+## [0.12.0] - 2025-10-15
+
+### Breaking Changes
+- **Removed `acknowledge_message` tool** - Messages are now automatically archived after being read
+  - `receive_messages` now auto-archives messages after returning them to the caller
+  - Messages moved to `projects/<project-id>/messages/<agent-name>/archive/` directory
+  - No explicit acknowledgment required - reading a message marks it as processed
+  - Tool count reduced from 15 to 14 tools
+  - **Migration**: Remove all `acknowledge_message` calls from agent code. Messages are handled automatically.
+
+### Changed
+- **Auto-Archive on Read** - Simplified message lifecycle
+  - Messages automatically moved to archive/ subdirectory after successful read
+  - Consistent with existing `leaveProject()` archiving behavior
+  - Provides audit trail without requiring explicit acknowledgment
+  - Reduces token usage and API complexity
+  - Archive directory automatically filtered from inbox reads
+- Updated `receive_messages` tool description to clarify auto-archiving behavior
+- Updated test suite: `tests/message-acknowledgment.test.ts` → `tests/message-receive.test.ts`
+- All tests updated to verify auto-archive behavior instead of explicit acknowledgment
+
+### Rationale
+Message acknowledgment provided false reliability guarantees. Agents lose all context on crash/restart, making unacknowledged messages in the inbox meaningless. Auto-archiving on read simplifies the API while preserving message history for debugging.
+
 ## [0.10.0] - 2025-10-14
 
 ### Added

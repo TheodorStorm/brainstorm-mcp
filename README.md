@@ -541,16 +541,7 @@ Get messages from your inbox. Supports **long-polling** for efficient real-time 
 }
 ```
 
-#### `acknowledge_message`
-Mark a message as processed. This removes it from your inbox.
-
-```typescript
-{
-  project_id: "api-redesign",
-  agent_name: "frontend",
-  message_id: "msg-550e8400-..."
-}
-```
+**Note**: Messages are automatically archived after being read (v0.12.0+). No explicit acknowledgment required.
 
 ### Shared Resources
 

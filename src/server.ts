@@ -671,7 +671,7 @@ export class AgentCoopServer {
         },
         {
           name: 'receive_messages',
-          description: 'Get inbox messages. Supports pagination and long-polling. Respond to messages with reply_expected=true.',
+          description: 'Get inbox messages. Messages are automatically archived after being read. Supports pagination and long-polling. Respond to messages with reply_expected=true.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -704,28 +704,6 @@ export class AgentCoopServer {
               }
             },
             required: ['project_id', 'agent_name']
-          }
-        },
-        {
-          name: 'acknowledge_message',
-          description: 'Mark a message as processed (removes it from your inbox)',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              project_id: {
-                type: 'string',
-                description: 'Project you are in'
-              },
-              agent_name: {
-                type: 'string',
-                description: 'Your agent name'
-              },
-              message_id: {
-                type: 'string',
-                description: 'Message ID to acknowledge'
-              }
-            },
-            required: ['project_id', 'agent_name', 'message_id']
           }
         },
         {
@@ -1715,21 +1693,6 @@ export class AgentCoopServer {
               content: [{
                 type: 'text',
                 text: JSON.stringify(response, null, 2)
-              }]
-            };
-          }
-
-          case 'acknowledge_message': {
-            const projectId = args.project_id as string;
-            const agentName = args.agent_name as string;
-            const messageId = args.message_id as string;
-
-            await this.storage.markMessageProcessed(projectId, agentName, messageId);
-
-            return {
-              content: [{
-                type: 'text',
-                text: JSON.stringify({ success: true }, null, 2)
               }]
             };
           }

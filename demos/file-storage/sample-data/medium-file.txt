@@ -451,28 +451,12 @@ Response:
   "has_more": false
 }
 
-acknowledge_message
--------------------
-Marks a message as processed, removing it from inbox.
+NOTE (v0.12.0): Messages are now automatically archived after being read.
+The acknowledge_message tool has been removed. Messages are moved to the
+archive/ directory automatically when fetched via receive_messages.
 
-Parameters:
-- project_id (required): Project context
-- agent_name (required): Your agent name
-- message_id (required): UUID of message to acknowledge
-
-Returns:
-- success: boolean
-
-Errors:
-- MESSAGE_NOT_FOUND: Message not in your inbox
-- AGENT_NOT_FOUND: Agent not in project
-
-Example:
-{
-  "project_id": "code-review-2024",
-  "agent_name": "security-auditor",
-  "message_id": "550e8400-e29b-41d4-a716-446655440000"
-}
+This simplifies the API and reduces token usage while maintaining an audit
+trail of processed messages for debugging purposes.
 
 store_resource
 --------------
