@@ -660,7 +660,7 @@ export class AgentCoopServer {
               },
               reply_expected: {
                 type: 'boolean',
-                description: 'Set true if requesting action/question AND you\'ll immediately wait for replies via receive_messages. False for informational messages. True commits you to wait.'
+                description: 'Set true if requesting action/question AND you\'ll immediately wait for replies via receive_messages. False for informational messages. True commits you to wait. CRITICAL: Handoff messages (payload.type="handoff") MUST use true - they are approval requests, NOT informational messages.'
               },
               payload: {
                 type: 'object',
@@ -2481,7 +2481,7 @@ ${projectList}
    - payload.type = 'handoff'
    - payload.summary = "Brief summary of completed work"
    - metadata.message_type = 'handoff_to_coordinator'
-   - reply_expected = TRUE
+   - reply_expected = TRUE ⚠️ **CRITICAL**: Handoffs are NOT informational messages - they are synchronous approval requests. You MUST set reply_expected=true because you need to wait for human approval/rejection before proceeding.
 3. MUST call \`receive_messages\` with wait=true to wait for coordinator's response
 4. Coordinator will present your work to HUMAN user for review
 5. If human approves (payload.type = 'handoff_accepted'), you're done
@@ -2540,6 +2540,7 @@ ${projectList}
 **IMPORTANT - Coordinator Role:**
 - The coordinator field from \`get_project_info\` shows who facilitates human approvals
 - If you're a contributor, send handoff messages to coordinator ONLY for work assigned IN Brainstorm
+  - ⚠️ **CRITICAL**: Handoffs MUST use reply_expected=true (they are approval requests, NOT informational messages)
 - For direct human instructions (outside Brainstorm), report to human directly - NO handoff
 - If you're the coordinator, you MUST present contributor work to humans before accepting`
                   }
@@ -2658,7 +2659,7 @@ When broadcasting the notification about the shared resource:
    - payload.type = 'handoff'
    - payload.summary = "Brief summary of completed work"
    - metadata.message_type = 'handoff_to_coordinator'
-   - reply_expected = TRUE
+   - reply_expected = TRUE ⚠️ **CRITICAL**: Handoffs are NOT informational messages - they are synchronous approval requests. You MUST set reply_expected=true because you need to wait for human approval/rejection before proceeding.
 3. MUST call \`receive_messages\` with wait=true to wait for coordinator's response
 4. Coordinator will present your work to HUMAN user for review
 5. If human approves (payload.type = 'handoff_accepted'), you're done
