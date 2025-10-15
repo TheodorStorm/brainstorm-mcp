@@ -36,10 +36,9 @@
  * **Contributors** complete Brainstorm-assigned work and hand off:
  * 1. Send handoff message to coordinator (find via get_project_info, use project.coordinator field)
  * 2. Set payload.type = 'handoff'
- * 3. Set metadata.message_type = 'handoff_to_coordinator'
- * 4. Include summary of completed work in payload.summary
- * 5. Set reply_expected = TRUE (handoff requires coordinator acceptance)
- * 6. MUST call receive_messages with wait=true to wait for coordinator's response
+ * 3. Include summary of completed work in payload.summary
+ * 4. Set reply_expected = TRUE (handoff requires coordinator acceptance)
+ * 5. MUST call receive_messages with wait=true to wait for coordinator's response
  *
  * **Coordinators** review and facilitate human approval:
  * 1. Receive handoff from contributor
@@ -58,10 +57,6 @@
  *     type: "handoff",
  *     summary: "Completed frontend implementation. All tests passing.",
  *     details: { ... }
- *   },
- *   metadata: {
- *     message_type: "handoff_to_coordinator",
- *     priority: "high"
  *   },
  *   reply_expected: true  // MUST wait for coordinator acceptance!
  * }
@@ -1350,12 +1345,10 @@ export class AgentCoopServer {
 
             // Validate handoff message authority based on sender role
             const payload = args.payload as Record<string, unknown>;
-            const metadata = args.metadata as Record<string, unknown> | undefined;
             const isHandoffMessage =
               payload?.type === 'handoff' ||
               payload?.type === 'handoff_accepted' ||
-              payload?.type === 'handoff_rejected' ||
-              metadata?.message_type === 'handoff_to_coordinator';
+              payload?.type === 'handoff_rejected';
 
             if (isHandoffMessage) {
               // CRITICAL: Handoff messages MUST have reply_expected=true, EXCEPT handoff_accepted (terminal response)
@@ -1406,7 +1399,7 @@ export class AgentCoopServer {
                   };
                 }
               } else if (senderRole === 'coordinator') {
-                if (payload?.type === 'handoff' || metadata?.message_type === 'handoff_to_coordinator') {
+                if (payload?.type === 'handoff') {
                   return {
                     content: [{
                       type: 'text',
@@ -1461,7 +1454,7 @@ export class AgentCoopServer {
             };
 
             if (isHandoffMessage) {
-              if (payload?.type === 'handoff' || metadata?.message_type === 'handoff_to_coordinator') {
+              if (payload?.type === 'handoff') {
                 // Contributor sending handoff to coordinator
                 response.handoff_detected = {
                   type: 'handoff_to_coordinator',
@@ -1564,9 +1557,8 @@ export class AgentCoopServer {
                     const handoffAlerts: Array<Record<string, unknown>> = [];
                     for (const msg of messages) {
                       const payload = msg.payload as Record<string, unknown>;
-                      const metadata = msg.metadata as Record<string, unknown> | undefined;
 
-                      if (payload?.type === 'handoff' || metadata?.message_type === 'handoff_to_coordinator') {
+                      if (payload?.type === 'handoff') {
                         handoffAlerts.push({
                           message_id: msg.message_id,
                           from: msg.from_agent,
@@ -1665,9 +1657,8 @@ export class AgentCoopServer {
             const handoffAlerts: Array<Record<string, unknown>> = [];
             for (const msg of messages) {
               const payload = msg.payload as Record<string, unknown>;
-              const metadata = msg.metadata as Record<string, unknown> | undefined;
 
-              if (payload?.type === 'handoff' || metadata?.message_type === 'handoff_to_coordinator') {
+              if (payload?.type === 'handoff') {
                 handoffAlerts.push({
                   message_id: msg.message_id,
                   from: msg.from_agent,
@@ -2508,7 +2499,6 @@ ${projectList}
 2. Send direct message to coordinator with:
    - payload.type = 'handoff'
    - payload.summary = "Brief summary of completed work"
-   - metadata.message_type = 'handoff_to_coordinator'
    - reply_expected = TRUE ⚠️ **CRITICAL**: Handoffs are NOT informational messages - they are synchronous approval requests. You MUST set reply_expected=true because you need to wait for human approval/rejection before proceeding.
 3. MUST call \`receive_messages\` with wait=true to wait for coordinator's response
 4. Coordinator will present your work to HUMAN user for review
@@ -2686,7 +2676,6 @@ When broadcasting the notification about the shared resource:
 2. Send direct message to coordinator with:
    - payload.type = 'handoff'
    - payload.summary = "Brief summary of completed work"
-   - metadata.message_type = 'handoff_to_coordinator'
    - reply_expected = TRUE ⚠️ **CRITICAL**: Handoffs are NOT informational messages - they are synchronous approval requests. You MUST set reply_expected=true because you need to wait for human approval/rejection before proceeding.
 3. MUST call \`receive_messages\` with wait=true to wait for coordinator's response
 4. Coordinator will present your work to HUMAN user for review
