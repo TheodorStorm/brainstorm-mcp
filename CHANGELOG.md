@@ -37,6 +37,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Health check prompt for detecting offline/stale agents
   - Project analytics (message counts, resource usage, member activity)
 
+## [0.12.2] - 2025-10-15
+
+### Added
+- **Reply Warning System** - Agents warned when messages don't expect replies
+  - `receive_messages` now includes `reply_warnings` array in response
+  - Warnings triggered for messages with `reply_expected: false`
+  - Each warning includes:
+    - Message ID and sender for reference
+    - Clear alert that no reply is expected
+    - Explanation that replies may not be received/processed
+    - Guidance to consult human supervisor if reply seems necessary
+  - Helps prevent inappropriate responses to informational messages
+  - Reinforces human-in-the-loop decision making for edge cases
+  - Non-breaking additive change (warnings are optional response field)
+- Updated `receive_messages` tool description to document reply warning behavior
+
+### Technical Details
+- Warning detection in both long-polling and standard message fetch paths
+- Follows existing `handoffAlerts` pattern for consistency
+- Uses explicit `=== false` check to avoid false positives from undefined/null
+- No performance impact (warnings built during message iteration)
+
+### Rationale
+Agents sometimes attempt to reply to informational messages that don't expect responses, leading to orphaned message workflows. This feature provides clear guidance at the point of message receipt, encouraging agents to verify with their human supervisor before sending potentially unnecessary replies.
+
+## [0.12.1] - 2025-10-15
+
+### Fixed
+- **Defensive locking for inbox reads** - Added file-based locking to `getAgentInbox()`
+  - Prevents potential concurrent access issues when reading and auto-archiving messages
+  - Serializes concurrent reads to same agent's inbox
+  - 5-second timeout for lock acquisition
+  - While agents properly re-poll after timeout (ensuring no message loss), lock provides defensive protection against edge cases
+
+### Changed
+- Test suite cleanup: Removed stale compiled test files from pre-v0.12.0
+
 ## [0.12.0] - 2025-10-15
 
 ### Breaking Changes

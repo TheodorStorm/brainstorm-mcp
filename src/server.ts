@@ -671,7 +671,7 @@ export class AgentCoopServer {
         },
         {
           name: 'receive_messages',
-          description: 'Get inbox messages. Messages are automatically archived after being read. Supports pagination and long-polling. Respond to messages with reply_expected=true.',
+          description: 'Get inbox messages. Messages are automatically archived after being read. Supports pagination and long-polling. Respond to messages with reply_expected=true. WARNING: Messages with reply_expected=false include a reply_warnings alert - consult your human supervisor if you believe a reply is necessary.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1538,8 +1538,25 @@ export class AgentCoopServer {
 
                     // Detect handoff messages and provide role-specific guidance
                     const handoffAlerts: Array<Record<string, unknown>> = [];
+                    const replyWarnings: Array<Record<string, unknown>> = [];
+
                     for (const msg of messages) {
                       const payload = msg.payload as Record<string, unknown>;
+
+                      // Check for messages with reply_expected: false
+                      if (msg.reply_expected === false) {
+                        replyWarnings.push({
+                          message_id: msg.message_id,
+                          from: msg.from_agent,
+                          alert: '⚠️ NO REPLY EXPECTED: This message does not expect a reply',
+                          critical_warning: [
+                            'The sender set reply_expected=false, indicating they are NOT waiting for a response',
+                            'Any replies you send may NOT be received or processed by the sender',
+                            'DO NOT send a reply unless absolutely necessary'
+                          ],
+                          if_reply_needed: 'If you believe a reply is necessary for this message, consult your human supervisor on how to handle this situation before sending any reply.'
+                        });
+                      }
 
                       if (payload?.type === 'handoff') {
                         handoffAlerts.push({
@@ -1590,6 +1607,10 @@ export class AgentCoopServer {
                       response.handoff_alerts = handoffAlerts;
                     }
 
+                    if (replyWarnings.length > 0) {
+                      response.reply_warnings = replyWarnings;
+                    }
+
                     return {
                       content: [{
                         type: 'text',
@@ -1638,8 +1659,25 @@ export class AgentCoopServer {
 
             // Detect handoff messages and provide role-specific guidance
             const handoffAlerts: Array<Record<string, unknown>> = [];
+            const replyWarnings: Array<Record<string, unknown>> = [];
+
             for (const msg of messages) {
               const payload = msg.payload as Record<string, unknown>;
+
+              // Check for messages with reply_expected: false
+              if (msg.reply_expected === false) {
+                replyWarnings.push({
+                  message_id: msg.message_id,
+                  from: msg.from_agent,
+                  alert: '⚠️ NO REPLY EXPECTED: This message does not expect a reply',
+                  critical_warning: [
+                    'The sender set reply_expected=false, indicating they are NOT waiting for a response',
+                    'Any replies you send may NOT be received or processed by the sender',
+                    'DO NOT send a reply unless absolutely necessary'
+                  ],
+                  if_reply_needed: 'If you believe a reply is necessary for this message, consult your human supervisor on how to handle this situation before sending any reply.'
+                });
+              }
 
               if (payload?.type === 'handoff') {
                 handoffAlerts.push({
@@ -1687,6 +1725,10 @@ export class AgentCoopServer {
 
             if (handoffAlerts.length > 0) {
               response.handoff_alerts = handoffAlerts;
+            }
+
+            if (replyWarnings.length > 0) {
+              response.reply_warnings = replyWarnings;
             }
 
             return {
