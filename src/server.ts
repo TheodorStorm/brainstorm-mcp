@@ -1358,6 +1358,34 @@ export class AgentCoopServer {
               metadata?.message_type === 'handoff_to_coordinator';
 
             if (isHandoffMessage) {
+              // CRITICAL: Handoff messages MUST have reply_expected=true, EXCEPT handoff_accepted (terminal response)
+              // - handoff (contributor): MUST use reply_expected=true (waits for approval/rejection)
+              // - handoff_rejected (coordinator): MUST use reply_expected=true (expects revised handoff)
+              // - handoff_accepted (coordinator): Can use reply_expected=false (terminal, no reply needed)
+              const isTerminalAccept = payload?.type === 'handoff_accepted';
+
+              if (!replyExpected && !isTerminalAccept) {
+                return {
+                  content: [{
+                    type: 'text',
+                    text: JSON.stringify({
+                      error: 'HANDOFF_REPLY_EXPECTED_REQUIRED',
+                      message: 'Handoff messages MUST have reply_expected=true (except handoff_accepted which is terminal). Handoffs and rejections are synchronous approval requests requiring immediate wait for response, NOT informational fire-and-forget messages.',
+                      provided: {
+                        reply_expected: replyExpected,
+                        payload_type: payload?.type
+                      },
+                      correct_usage: {
+                        handoff: 'reply_expected=true (contributor waits for coordinator response)',
+                        handoff_rejected: 'reply_expected=true (coordinator waits for revised handoff)',
+                        handoff_accepted: 'reply_expected=false or true (terminal response, work complete)'
+                      }
+                    }, null, 2)
+                  }],
+                  isError: true
+                };
+              }
+
               // Validation rules:
               // - Contributors can ONLY send 'handoff' messages
               // - Coordinators can ONLY send 'handoff_accepted' or 'handoff_rejected' messages
