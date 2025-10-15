@@ -15,4 +15,5 @@ echo ""
 echo "Starting Claude Code..."
 echo ""
 
+export BRAINSTORM_CLIENT_ID="debate-agent-a"
 claude "Read and follow the instructions in AGENT_A.md. You are Agent A, arguing IN FAVOR of the statement in TOPIC.md. Use web search to find supporting evidence and debate until consensus is reached." --allowedTools "mcp__brainstorm,WebSearch"

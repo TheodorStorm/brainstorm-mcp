@@ -18,4 +18,5 @@ echo ""
 echo "Starting manager..."
 echo ""
 
+export BRAINSTORM_CLIENT_ID="pathfinding-setup"
 claude "Read and follow the instructions in SETUP.md" --allowedTools "mcp__brainstorm"

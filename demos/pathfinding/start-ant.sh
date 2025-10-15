@@ -36,6 +36,7 @@ esac
 echo "🐜 Starting $ANT_ID (color: $COLOR, position: $START_X,$START_Y)"
 echo ""
 
+export BRAINSTORM_CLIENT_ID="pathfinding-$ANT_ID"
 claude "You are $ANT_ID in a pathfinding demo. Read and follow the instructions in agent-instructions.md EXACTLY. Use color $COLOR and start at position {x: $START_X, y: $START_Y}.
 
 CRITICAL RULES:
