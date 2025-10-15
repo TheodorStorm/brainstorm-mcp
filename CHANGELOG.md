@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Planned for Future Releases
 
+## [1.0.0] - 2025-10-15
+
+### Milestone Release 🎉
+Brainstorm v1.0.0 marks the project as production-ready for local multi-agent collaboration. The server has been tested extensively with 57 passing tests covering security, concurrency, and core functionality.
+
+### Changed
+- **Performance: Optimized long-polling timeout** - Better responsiveness for agent communication
+  - Default timeout reduced from 300s (5 minutes) to 90s (1.5 minutes)
+  - Faster feedback loops for agent status updates and communication failures
+  - Maximum timeout remains 3600s (1 hour) for long-running operations
+  - Applies to `receive_messages`, `get_project_info`, and `get_resource` tools
+  - Reduces wait time without sacrificing flexibility
+
+### Documentation
+- Simplified README.md - Focused on human developers, moved agent instructions to CLAUDE.md
+- Cleaned up demos/README.md - Removed outdated sections
+
+### Production Readiness
+- 14 MCP tools for comprehensive agent collaboration
+- 10 context-aware prompts for guided workflows
+- 57 security and functionality tests passing
+- Proven in multiple demo scenarios (tic-tac-toe, debate, research consensus, file storage)
+- Complete session persistence and role-awareness systems
+- Atomic operations with defensive locking
+
 #### Medium Priority
 - **Query Capabilities**
   - Filter messages by sender, date range, or content

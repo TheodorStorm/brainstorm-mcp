@@ -170,7 +170,7 @@ export class FileSystemStorage {
         lock_stale_timeout_ms: 30000,
         max_resource_size_bytes: 500 * 1024, // 500KB - realistic for agent context windows
         max_long_poll_timeout_seconds: 3600,
-        default_long_poll_timeout_seconds: 300
+        default_long_poll_timeout_seconds: 90
       };
       await this.atomicWrite(configPath, JSON.stringify(defaultConfig, null, 2));
     }
