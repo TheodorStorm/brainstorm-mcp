@@ -1380,35 +1380,40 @@ export class AgentCoopServer {
               }
 
               // Validation rules:
-              // - Contributors can ONLY send 'handoff' messages
-              // - Coordinators can ONLY send 'handoff_accepted' or 'handoff_rejected' messages
-              if (senderRole === 'contributor') {
-                if (payload?.type === 'handoff_accepted' || payload?.type === 'handoff_rejected') {
+              // - ONLY contributors can send 'handoff' messages
+              // - ONLY coordinators can send 'handoff_accepted' or 'handoff_rejected' messages
+
+              // Check: handoff_accepted/rejected MUST be from coordinator
+              if (payload?.type === 'handoff_accepted' || payload?.type === 'handoff_rejected') {
+                if (senderRole !== 'coordinator') {
                   return {
                     content: [{
                       type: 'text',
                       text: JSON.stringify({
                         error: 'HANDOFF_AUTHORITY_ERROR',
-                        message: `YOU are a contributor agent. Contributors cannot send "${payload?.type}" messages - only coordinators can approve/reject work.`,
-                        your_role: 'contributor',
-                        allowed_handoff_types: ['handoff'],
-                        details: 'Send handoff messages to the coordinator when your work is ready for human review. The coordinator will handle approval/rejection.'
+                        message: `ONLY coordinators can send "${payload?.type}" messages. YOU are: ${senderRole}`,
+                        your_role: senderRole,
+                        required_role: 'coordinator',
+                        details: 'Approval/rejection messages can only come from the coordinator who facilitates human review.'
                       }, null, 2)
                     }],
                     isError: true
                   };
                 }
-              } else if (senderRole === 'coordinator') {
-                if (payload?.type === 'handoff') {
+              }
+
+              // Check: handoff MUST be from contributor
+              if (payload?.type === 'handoff') {
+                if (senderRole !== 'contributor') {
                   return {
                     content: [{
                       type: 'text',
                       text: JSON.stringify({
                         error: 'HANDOFF_AUTHORITY_ERROR',
-                        message: 'YOU are the coordinator agent. Coordinators do not send handoff messages - those come from contributors.',
-                        your_role: 'coordinator',
-                        allowed_handoff_types: ['handoff_accepted', 'handoff_rejected'],
-                        details: 'As coordinator, you receive handoff messages from contributors, present their work to humans, then relay the decision via handoff_accepted or handoff_rejected.'
+                        message: `ONLY contributors can send "handoff" messages. YOU are: ${senderRole}`,
+                        your_role: senderRole,
+                        required_role: 'contributor',
+                        details: 'Handoff messages come from contributors submitting work for approval. Coordinators receive handoffs and send approval/rejection responses.'
                       }, null, 2)
                     }],
                     isError: true
