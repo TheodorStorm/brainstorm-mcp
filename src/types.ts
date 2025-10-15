@@ -384,7 +384,7 @@ export interface StoredResourceManifest extends ResourceManifest {
  *   lock_stale_timeout_ms: 30000,
  *   max_resource_size_bytes: 512000,
  *   max_long_poll_timeout_seconds: 3600,
- *   default_long_poll_timeout_seconds: 300
+ *   default_long_poll_timeout_seconds: 90
  * }
  */
 export interface SystemConfig {

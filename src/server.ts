@@ -604,7 +604,7 @@ export class AgentCoopServer {
               },
               timeout_seconds: {
                 type: 'number',
-                description: 'Maximum seconds to wait when wait=true (default: 300, max: 3600)',
+                description: 'Maximum seconds to wait when wait=true (default: 90, max: 3600)',
                 minimum: 1,
                 maximum: 3600
               }
@@ -698,7 +698,7 @@ export class AgentCoopServer {
               },
               timeout_seconds: {
                 type: 'number',
-                description: 'Maximum seconds to wait for messages when wait=true (default: 300, max: 3600)',
+                description: 'Maximum seconds to wait for messages when wait=true (default: 90, max: 3600)',
                 minimum: 1,
                 maximum: 3600
               }
@@ -791,7 +791,7 @@ export class AgentCoopServer {
               },
               timeout_seconds: {
                 type: 'number',
-                description: 'Maximum seconds to wait when wait=true (default: 300, max: 3600)',
+                description: 'Maximum seconds to wait when wait=true (default: 90, max: 3600)',
                 minimum: 1,
                 maximum: 3600
               }
@@ -1141,7 +1141,7 @@ export class AgentCoopServer {
 
             // Get timeout settings from system config
             const config = await this.storage.getSystemConfig();
-            const defaultTimeout = config?.default_long_poll_timeout_seconds || 300;
+            const defaultTimeout = config?.default_long_poll_timeout_seconds || 90;
             const maxTimeout = config?.max_long_poll_timeout_seconds || 3600;
             const timeoutSeconds = Math.min(args.timeout_seconds as number || defaultTimeout, maxTimeout);
 
@@ -1471,8 +1471,8 @@ export class AgentCoopServer {
               response.reply_expected_guidance = {
                 message: '⏳ You set reply_expected=true - you MUST now wait for a response',
                 action_required: 'Call receive_messages with wait=true to wait for the recipient\'s reply',
-                recommended_timeout: 300,
-                timeout_note: 'Wait at least 300 seconds (5 minutes) - this is the default long-polling timeout. You can specify timeout_seconds up to 3600 (1 hour) if needed.'
+                recommended_timeout: 90,
+                timeout_note: 'Wait at least 90 seconds (1.5 minutes) - this is the default long-polling timeout. You can specify timeout_seconds up to 3600 (1 hour) if needed.'
               };
             }
 
@@ -1500,7 +1500,7 @@ export class AgentCoopServer {
 
             // Get timeout settings from system config
             const config = await this.storage.getSystemConfig();
-            const defaultTimeout = config?.default_long_poll_timeout_seconds || 300;
+            const defaultTimeout = config?.default_long_poll_timeout_seconds || 90;
             const maxTimeout = config?.max_long_poll_timeout_seconds || 3600;
             const timeoutSeconds = Math.min(args.timeout_seconds as number || defaultTimeout, maxTimeout);
 
@@ -1791,7 +1791,7 @@ export class AgentCoopServer {
 
             // Get timeout settings from system config
             const config = await this.storage.getSystemConfig();
-            const defaultTimeout = config?.default_long_poll_timeout_seconds || 300;
+            const defaultTimeout = config?.default_long_poll_timeout_seconds || 90;
             const maxTimeout = config?.max_long_poll_timeout_seconds || 3600;
             const timeoutSeconds = Math.min(args.timeout_seconds as number || defaultTimeout, maxTimeout);
 
