@@ -1201,7 +1201,7 @@ export class AgentCoopServer {
                   content: [{
                     type: 'text',
                     text: JSON.stringify({
-                      error: 'Project not found',
+                      error: 'Project not found. HINT: If you expected this project to exist, verify you are using the EXACT "Working directory" value from your <env> block (shown at conversation start) for the working_directory parameter in ALL Brainstorm tools. Using current PWD or different paths will create a different client identity.',
                       waited_ms: Date.now() - startTime,
                       timeout: true,
                       retry: true,
@@ -1227,7 +1227,7 @@ export class AgentCoopServer {
               return {
                 content: [{
                   type: 'text',
-                  text: JSON.stringify({ error: 'Project not found' })
+                  text: JSON.stringify({ error: 'Project not found. HINT: If you expected this project to exist, verify you are using the EXACT "Working directory" value from your <env> block (shown at conversation start) for the working_directory parameter in ALL Brainstorm tools. Using current PWD or different paths will create a different client identity.' })
                 }],
                 isError: true
               };
@@ -2164,7 +2164,7 @@ export class AgentCoopServer {
                   critical_reminder: '⚠️ CRITICAL: For ALL Brainstorm tool calls requiring working_directory parameter, ALWAYS use the initial "Working directory" value from your <env> block (shown at conversation start). NEVER use current PWD, shell working directory, or values from tool responses. Session persistence depends on using the exact same directory consistently throughout your conversation.',
                   identity_reminder: identityReminder.length > 0
                     ? identityReminder
-                    : ['You are not currently a member of any projects'],
+                    : ['You are not currently a member of any projects. HINT: If you expected to be a member, verify you are using the EXACT "Working directory" value from your <env> block (shown at conversation start) for the working_directory parameter in ALL Brainstorm tools. Using current PWD or different paths will create a different client identity.'],
                   projects: projectStatuses,
                   total_projects: projectStatuses.length,
                   total_unread_messages: totalUnread,
