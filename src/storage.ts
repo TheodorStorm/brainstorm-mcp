@@ -697,7 +697,7 @@ export class FileSystemStorage {
     const metadata = await this.getProjectMetadata(projectId);
     if (!metadata) {
       throw new NotFoundError(
-        'Project not found',
+        'Project not found. HINT: If you expected this project to exist, verify you are using the EXACT "Working directory" value from your <env> block (shown at conversation start) for the working_directory parameter in ALL Brainstorm tools. Using current PWD or different paths will create a different client identity.',
         'PROJECT_NOT_FOUND',
         { project_id: projectId }
       );
@@ -803,7 +803,7 @@ export class FileSystemStorage {
     const project = await this.getProjectMetadata(member.project_id);
     if (!project) {
       throw new NotFoundError(
-        'Project not found',
+        'Project not found. HINT: If you expected this project to exist, verify you are using the EXACT "Working directory" value from your <env> block (shown at conversation start) for the working_directory parameter in ALL Brainstorm tools. Using current PWD or different paths will create a different client identity.',
         'PROJECT_NOT_FOUND',
         { project_id: member.project_id }
       );
@@ -954,7 +954,7 @@ export class FileSystemStorage {
       const member = await this.getProjectMember(projectId, agentName);
       if (!member) {
         throw new NotFoundError(
-          'Member not found',
+          'Member not found. HINT: If you expected to be a member, verify you are using the EXACT "Working directory" value from your <env> block (shown at conversation start) for the working_directory parameter in ALL Brainstorm tools. Using current PWD or different paths will create a different client identity.',
           'MEMBER_NOT_FOUND',
           { project_id: projectId, agent_name: agentName }
         );
@@ -1020,7 +1020,7 @@ export class FileSystemStorage {
     const metadata = await this.getProjectMetadata(projectId);
     if (!metadata) {
       throw new NotFoundError(
-        'Project not found',
+        'Project not found. HINT: If you expected this project to exist, verify you are using the EXACT "Working directory" value from your <env> block (shown at conversation start) for the working_directory parameter in ALL Brainstorm tools. Using current PWD or different paths will create a different client identity.',
         'PROJECT_NOT_FOUND',
         { project_id: projectId }
       );
@@ -1038,7 +1038,7 @@ export class FileSystemStorage {
       const fromMember = await this.getProjectMember(projectId, fromAgent);
       if (!fromMember) {
         throw new NotFoundError(
-          'Source agent not found in project',
+          'Source agent not found in project. HINT: If you expected to be a member, verify you are using the EXACT "Working directory" value from your <env> block (shown at conversation start) for the working_directory parameter in ALL Brainstorm tools. Using current PWD or different paths will create a different client identity.',
           'FROM_AGENT_NOT_FOUND',
           { project_id: projectId, agent_name: fromAgent }
         );
@@ -1047,7 +1047,7 @@ export class FileSystemStorage {
       const toMember = await this.getProjectMember(projectId, toAgent);
       if (!toMember) {
         throw new NotFoundError(
-          'Target agent not found in project',
+          'Target agent not found in project. HINT: If you expected this agent to be a member, verify you are using the EXACT "Working directory" value from your <env> block (shown at conversation start) for the working_directory parameter in ALL Brainstorm tools. Using current PWD or different paths will create a different client identity. Alternatively, use get_project_info to see the current list of project members.',
           'TO_AGENT_NOT_FOUND',
           { project_id: projectId, agent_name: toAgent }
         );
@@ -1149,7 +1149,7 @@ export class FileSystemStorage {
     const sender = await this.getProjectMember(message.project_id, message.from_agent);
     if (!sender) {
       throw new NotFoundError(
-        'Sender not found in project',
+        'Sender not found in project. HINT: If you expected to be a member, verify you are using the EXACT "Working directory" value from your <env> block (shown at conversation start) for the working_directory parameter in ALL Brainstorm tools. Using current PWD or different paths will create a different client identity.',
         'SENDER_NOT_FOUND',
         { project_id: message.project_id, agent_name: message.from_agent }
       );
@@ -1183,7 +1183,7 @@ export class FileSystemStorage {
       const recipient = await this.getProjectMember(message.project_id, message.to_agent);
       if (!recipient) {
         throw new NotFoundError(
-          'Recipient not found in project',
+          'Recipient not found in project. HINT: If you expected this agent to be a member, verify you are using the EXACT "Working directory" value from your <env> block (shown at conversation start) for the working_directory parameter in ALL Brainstorm tools. Using current PWD or different paths will create a different client identity. Alternatively, use get_project_info to see the current list of project members.',
           'RECIPIENT_NOT_FOUND',
           { project_id: message.project_id, agent_name: message.to_agent }
         );
@@ -1488,7 +1488,7 @@ export class FileSystemStorage {
     const project = await this.getProjectMetadata(manifest.project_id);
     if (!project) {
       throw new NotFoundError(
-        'Project not found',
+        'Project not found. HINT: If you expected this project to exist, verify you are using the EXACT "Working directory" value from your <env> block (shown at conversation start) for the working_directory parameter in ALL Brainstorm tools. Using current PWD or different paths will create a different client identity.',
         'PROJECT_NOT_FOUND',
         { project_id: manifest.project_id }
       );
@@ -1501,7 +1501,7 @@ export class FileSystemStorage {
     const agent = await this.getProjectMember(manifest.project_id, operatingAgent);
     if (!agent) {
       throw new NotFoundError(
-        'Agent not found in project',
+        'Agent not found in project. HINT: If you expected to be a member, verify you are using the EXACT "Working directory" value from your <env> block (shown at conversation start) for the working_directory parameter in ALL Brainstorm tools. Using current PWD or different paths will create a different client identity.',
         'AGENT_NOT_FOUND',
         { project_id: manifest.project_id, agent_name: operatingAgent }
       );
@@ -1876,7 +1876,7 @@ export class FileSystemStorage {
     const storedManifest = await this.getResourceManifestOnly(projectId, resourceId);
     if (!storedManifest) {
       throw new NotFoundError(
-        'Resource not found',
+        'Resource not found. HINT: If you expected this resource to exist, verify you are using the EXACT "Working directory" value from your <env> block (shown at conversation start) for the working_directory parameter in ALL Brainstorm tools. Using current PWD or different paths will create a different client identity.',
         'RESOURCE_NOT_FOUND',
         { project_id: projectId, resource_id: resourceId }
       );
@@ -2108,7 +2108,7 @@ export class FileSystemStorage {
     const project = await this.getProjectMetadata(projectId);
     if (!project) {
       throw new NotFoundError(
-        'Project not found',
+        'Project not found. HINT: If you expected this project to exist, verify you are using the EXACT "Working directory" value from your <env> block (shown at conversation start) for the working_directory parameter in ALL Brainstorm tools. Using current PWD or different paths will create a different client identity.',
         'PROJECT_NOT_FOUND',
         { project_id: projectId }
       );
@@ -2118,7 +2118,7 @@ export class FileSystemStorage {
     const member = await this.getProjectMember(projectId, agentName);
     if (!member) {
       throw new NotFoundError(
-        'Agent is not a member of this project',
+        'Agent is not a member of this project. HINT: If you expected to be a member, verify you are using the EXACT "Working directory" value from your <env> block (shown at conversation start) for the working_directory parameter in ALL Brainstorm tools. Using current PWD or different paths will create a different client identity.',
         'MEMBER_NOT_FOUND',
         { project_id: projectId, agent_name: agentName }
       );
@@ -2219,7 +2219,7 @@ export class FileSystemStorage {
     const metadata = await this.getProjectMetadata(projectId);
     if (!metadata) {
       throw new NotFoundError(
-        'Project not found',
+        'Project not found. HINT: If you expected this project to exist, verify you are using the EXACT "Working directory" value from your <env> block (shown at conversation start) for the working_directory parameter in ALL Brainstorm tools. Using current PWD or different paths will create a different client identity.',
         'PROJECT_NOT_FOUND',
         { project_id: projectId }
       );
