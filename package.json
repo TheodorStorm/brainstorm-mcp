@@ -1,6 +1,6 @@
 {
   "name": "brainstorm",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MCP server enabling multi-agent collaboration and coordination",
   "type": "module",
   "main": "dist/src/index.js",
@@ -13,7 +13,12 @@
     "test": "npm install && npm run build && node --test dist/tests/*.test.js",
     "cleanup": "node scripts/cleanup-project.js"
   },
-  "keywords": ["mcp", "agent", "cooperation", "collaboration"],
+  "keywords": [
+    "mcp",
+    "agent",
+    "cooperation",
+    "collaboration"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
