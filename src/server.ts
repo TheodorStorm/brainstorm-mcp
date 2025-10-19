@@ -162,7 +162,7 @@ import type {
  *
  * **Complexity:** O(1) - simple string lookup
  *
- * @param role - Agent's role label (from member.labels.role)
+ * @param role - Agent's structural role (determined from project.coordinator_agent, not member.labels.role)
  * @returns Human-readable description of role responsibilities
  *
  * @example
@@ -1318,8 +1318,10 @@ export class AgentCoopServer {
             }
 
             // Get sender's role for validation and response guidance
-            const sender = await this.storage.getProjectMember(projectId, fromAgent);
-            const senderRole = sender?.labels?.role || 'contributor';
+            // Role is determined by checking if sender is the project coordinator (not by member labels)
+            const project = await this.storage.getProjectMetadata(projectId);
+            const isCoordinator = project?.coordinator_agent === fromAgent;
+            const senderRole = isCoordinator ? 'coordinator' : 'contributor';
 
             // Validate handoff message authority based on sender role
             const payload = args.payload as Record<string, unknown>;
