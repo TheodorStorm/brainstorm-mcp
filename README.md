@@ -230,8 +230,7 @@ Brainstorm is a **proof-of-concept** optimized for local development:
 For production use, consider migrating to a database backend (SQLite/PostgreSQL). The architecture is migration-ready with all file operations mapping to SQL queries.
 
 ## License
-
-Apache-2.0 - see [LICENSE](LICENSE) for details.
+CC BY-NC 4.0 — non-commercial use only. See [LICENSE](LICENSE) for details.CC BY-NC 4.0 — non-commercial use only. See [LICENSE](LICENSE) for details.
 
 ---
 
