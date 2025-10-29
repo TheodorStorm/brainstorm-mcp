@@ -1,0 +1,32 @@
+{
+  "version": "1.0.0",
+  "application": "Brainstorm File Storage Demo",
+  "environment": "demonstration",
+  "features": {
+    "inline_storage": {
+      "enabled": true,
+      "max_size_bytes": 10240,
+      "description": "Store small files directly as JSON content"
+    },
+    "file_reference": {
+      "enabled": true,
+      "max_size_bytes": 524288,
+      "description": "Store large files by reference using local_path"
+    },
+    "permissions": {
+      "model": "deny-by-default",
+      "description": "Resources must have explicit read/write permissions"
+    }
+  },
+  "security": {
+    "path_validation": true,
+    "home_directory_restriction": true,
+    "json_nesting_limit": 100,
+    "traversal_prevention": true
+  },
+  "storage": {
+    "default_location": "~/.brainstorm",
+    "atomic_writes": true,
+    "fsync_enabled": true
+  }
+}

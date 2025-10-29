@@ -1,0 +1,137 @@
+BRAINSTORM MCP SERVER - TECHNICAL DOCUMENTATION
+==============================================
+
+Introduction
+------------
+
+Brainstorm is a Model Context Protocol (MCP) server that enables multi-agent collaboration through a project-centric workflow. This document provides technical details about the file storage capabilities introduced in version 0.4.0.
+
+File Storage Architecture
+-------------------------
+
+Brainstorm provides two distinct storage mechanisms optimized for different file sizes:
+
+1. INLINE STORAGE (< 10KB)
+   - Files are stored directly as JSON strings in the resource manifest
+   - Advantages: Simple, atomic, no external dependencies
+   - Best for: Configuration files, small documents, JSON data
+   - Implementation: Content passed via 'content' parameter
+
+2. FILE REFERENCE STORAGE (> 10KB, < 500KB)
+   - Files are stored by reference using absolute paths
+   - Advantages: No duplication, efficient for large files
+   - Best for: Images, documents, datasets, media files
+   - Implementation: Path passed via 'local_path' parameter
+
+Security Model
+--------------
+
+All file operations enforce strict security controls:
+
+- Path Traversal Prevention: All identifiers validated with whitelist regex
+- Home Directory Restriction: Files must be within user's home directory
+- Permission Enforcement: Deny-by-default model requires explicit access grants
+- Payload Validation: JSON nesting depth limited to 100 levels
+- Size Limits: 10KB inline, 500KB file reference (configurable)
+
+Permission System
+-----------------
+
+Resources use a granular permission model:
+
+{
+  "permissions": {
+    "read": ["agent1", "agent2", "*"],  // "*" grants public read
+    "write": ["agent1"]                  // Explicit write access only
+  }
+}
+
+Permissions are immutable after resource creation. Update operations preserve the original permissions to prevent privilege escalation.
+
+Storage Operations
+------------------
+
+CREATE: Store a new resource with content or local_path
+READ: Retrieve resource by ID with permission check
+UPDATE: Modify resource while preserving permissions
+LIST: Discover resources with read access
+DELETE: Remove resources (creator only)
+
+Atomic Guarantees
+-----------------
+
+All storage operations use atomic file system primitives:
+
+1. Write to temporary file
+2. fsync() to ensure durability
+3. Atomic rename to final location
+4. No TOCTOU vulnerabilities
+
+This ensures consistency even in the event of crashes or concurrent access.
+
+Concurrency Control
+-------------------
+
+File system locks prevent race conditions:
+
+- Lock files in dedicated locks/ directory
+- Exclusive creation flag (O_CREAT|O_EXCL)
+- Stale lock detection (30 second timeout)
+- PID and timestamp tracking
+- Automatic cleanup of abandoned locks
+
+Migration Path
+--------------
+
+The current file system storage is designed for easy migration to databases:
+
+- All UUIDs map to primary keys
+- JSON files map directly to tables
+- Storage methods map to repository patterns
+- Lock files become row-level locks
+
+This allows seamless transition from file storage to PostgreSQL, SQLite, or other databases without changing the MCP interface.
+
+Performance Characteristics
+---------------------------
+
+Inline Storage:
+- Latency: ~1-2ms for reads
+- Throughput: Limited by JSON parsing
+- Best for: <1KB files
+
+File Reference:
+- Latency: ~5-10ms for reads
+- Throughput: Limited by filesystem I/O
+- Best for: 10KB-500KB files
+
+Scalability: Current implementation supports hundreds of resources per project. For larger deployments, database migration is recommended.
+
+Best Practices
+--------------
+
+1. Use inline storage for configuration and metadata
+2. Use file reference for documents and datasets
+3. Set permissions explicitly (never rely on defaults)
+4. Keep file paths absolute and within home directory
+5. Monitor payload sizes to avoid hitting limits
+6. Clean up resources when no longer needed
+
+Error Handling
+--------------
+
+Common errors and their solutions:
+
+- PAYLOAD_TOO_LARGE: Use file reference instead of inline content
+- PATH_OUTSIDE_HOME: Ensure file is in home directory
+- PERMISSION_DENIED: Verify agent has read/write permission
+- RESOURCE_NOT_FOUND: Check resource ID spelling
+- CONCURRENT_MODIFICATION: Retry with exponential backoff
+
+Conclusion
+----------
+
+Brainstorm's file storage system provides a secure, efficient, and scalable foundation for agent collaboration. The dual storage mechanism (inline + reference) optimizes for both small and large files while maintaining strong security guarantees.
+
+For more information, see the full documentation at:
+https://github.com/anthropics/brainstorm

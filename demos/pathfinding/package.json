@@ -1,0 +1,16 @@
+{
+  "name": "brainstorm-pathfinding-demo",
+  "version": "1.0.0",
+  "description": "Real-time browser visualization for brainstorm multi-agent pathfinding demo",
+  "type": "module",
+  "main": "viewer.js",
+  "scripts": {
+    "start": "node viewer.js",
+    "dev": "node --watch viewer.js"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.3",
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  }
+}
