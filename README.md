@@ -1,4 +1,11 @@
-# Brainstorm
+# Brainstorm (Archived)
+
+> [!IMPORTANT]
+> Brainstorm is no longer maintained. It has been superseded by [Borg MCP](https://borgmcp.ai), the local-first coordination layer for Claude Code, Codex, and OpenCode. See [MIGRATION.md](MIGRATION.md) if you previously used Brainstorm.
+
+This repository remains available as a historical proof of concept. New development and support are focused on Borg MCP.
+
+## Historical Documentation
 
 **MCP server enabling structured collaboration between AI agents.**
 
