@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned for Future Releases
+### Archived
+
+- Brainstorm was retired on August 9, 2026, and superseded by [Borg MCP](https://borgmcp.ai).
+- Future development and support have moved to Borg MCP.
 
 ## [1.0.0] - 2025-10-15
 
